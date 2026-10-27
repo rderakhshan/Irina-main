@@ -23,6 +23,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+try:
+    from ._env import load_dotenv
+except ImportError:
+    from _env import load_dotenv
+
 from src.back.harness.loop.runner import EventType, RunEvent, run_loop
 from src.back.harness.loop.termination import TerminationPolicy
 from src.back.harness.providers.base import ProviderResponse, ToolCall
@@ -145,6 +150,7 @@ def dice_completion_policy(
 
 def main() -> int:
     """Run the live dice demo and return a process exit code."""
+    load_dotenv()
     try:
         provider = DeepSeekProvider()
     except RuntimeError as exc:

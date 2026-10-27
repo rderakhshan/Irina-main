@@ -120,7 +120,22 @@ tests/              Offline unittest suite with a scripted provider
 ### Run the dice demo
 
 The demo requires `DEEPSEEK_API_KEY`. Optional overrides are `IRINA_MODEL` and
-`DEEPSEEK_BASE_URL`.
+`DEEPSEEK_BASE_URL`. Demo entry points load the repository's ignored `.env` file
+without overwriting variables already exported in the shell.
+
+Fill in the local file (never commit it):
+
+```dotenv
+DEEPSEEK_API_KEY=<your key>
+```
+
+Then run:
+
+```powershell
+python demos/day1_dice.py
+```
+
+Or export the key for the current shell instead:
 
 ```powershell
 $env:DEEPSEEK_API_KEY = "<your key>"
@@ -141,8 +156,14 @@ credentials are required.
 
 ### Live verification
 
-Test A is the dice demo above. Test B is a text-only landing-page request with
-no tools:
+After filling in `.env`, one command runs both required live demonstrations:
+
+```powershell
+python demos/verify_live.py
+```
+
+Test A is the dice task. Test B is a text-only landing-page request with no
+tools:
 
 ```
 Build a landing page for a coffee shop.
@@ -150,8 +171,11 @@ Provide the HTML and CSS directly in your answer.
 Do not write files.
 ```
 
-With no tools configured, a useful non-empty answer should be accepted as
-`COMPLETED`; no tool calls should appear.
+The verifier checks that Test A completed with real dice evidence, and that Test
+B completed without tool calls while returning substantial HTML and CSS
+(`<html`/`<!doctype html` plus `<style`/`css`, at least 300 characters). It exits
+non-zero if either demonstration fails or if no key is configured. With no tools
+configured, a useful non-empty answer is accepted as `COMPLETED`.
 
 ### Day 1 limitations
 

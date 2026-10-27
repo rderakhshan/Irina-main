@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .context_management.context import TaskState, TaskStateObserver
+from .context_management.context import TaskState
 from .loop.runner import EventType, RunEvent
 from .loop.state import RunResult
 from .providers.base import TokenUsage

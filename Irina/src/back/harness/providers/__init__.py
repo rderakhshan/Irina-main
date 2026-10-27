@@ -19,8 +19,12 @@ from .base import (
     TokenUsage,
     ToolCall,
 )
+from .deepseek import API_ROOT, DEFAULT_MODEL, DeepSeekProvider
 
 __all__ = [
+    "API_ROOT",
+    "DEFAULT_MODEL",
+    "DeepSeekProvider",
     "Provider",
     "ProviderError",
     "ProviderHTTPError",

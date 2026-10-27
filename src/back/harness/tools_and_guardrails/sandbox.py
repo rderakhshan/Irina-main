@@ -379,6 +379,21 @@ class OpenShellSandbox:
 
     close = stop
 
+    def delete(self) -> None:
+        """Delete the sandbox even if startup did not complete.
+
+        Raises:
+            SandboxError: If OpenShell reports a cleanup failure.
+        """
+        result = self._cli(["sandbox", "delete", self.name], timeout=120)
+        self._started = False
+        self.workspace = None
+        if result.returncode != 0:
+            raise SandboxError(
+                f"failed to delete sandbox {self.name!r}: "
+                f"{_decode(result.stderr).strip()}"
+            )
+
     def __enter__(self) -> "OpenShellSandbox":
         return self.start()
 

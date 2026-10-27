@@ -98,7 +98,11 @@ def long_messages(pairs: int = 5) -> list[dict]:
     return messages
 
 
-def assert_tool_integrity(testcase: unittest.TestCase, messages: list[dict]) -> None:
+def assert_tool_integrity(
+    testcase: unittest.TestCase,
+    messages: list[dict],
+    require_calls: bool = True,
+) -> None:
     """Assert every assistant tool call has exactly one result and vice versa."""
     calls = {}
     for message in messages:
@@ -111,7 +115,8 @@ def assert_tool_integrity(testcase: unittest.TestCase, messages: list[dict]) -> 
             call_id = message.get("tool_call_id")
             testcase.assertIn(call_id, calls)
             calls[call_id] += 1
-    testcase.assertTrue(calls)
+    if require_calls:
+        testcase.assertTrue(calls)
     for call_id, count in calls.items():
         testcase.assertEqual(count, 1, call_id)
 
@@ -168,7 +173,7 @@ class CompactionTests(unittest.TestCase):
         self.assertEqual(events, [])
 
     def test_compaction_preserves_task_recent_groups_and_state(self) -> None:
-        messages = long_messages(5)
+        messages = long_messages(20)
         state = TaskState(goal="Create the files and verify them.")
         state.add_completed("wrote file-0.txt")
         state.add_modified("file-0.txt")
@@ -178,7 +183,7 @@ class CompactionTests(unittest.TestCase):
         result = compact(
             "model",
             messages,
-            400,
+            1500,
             provider=provider,
             task_state=state,
             on_event=events.append,
@@ -194,7 +199,7 @@ class CompactionTests(unittest.TestCase):
         self.assertIn("file-0.txt", result[2]["text"])
         assert_tool_integrity(self, result)
         self.assertEqual(estimate_tokens(result), events[-1].after_tokens)
-        self.assertLessEqual(events[-1].after_tokens or 0, 400)
+        self.assertLessEqual(events[-1].after_tokens or 0, 1500)
         self.assertTrue(events[-1].compaction_succeeded)
         self.assertGreater(events[-1].summarized_messages, 0)
         self.assertGreaterEqual(
@@ -202,11 +207,11 @@ class CompactionTests(unittest.TestCase):
         )
 
     def test_recent_slice_never_starts_with_a_bare_tool_result(self) -> None:
-        messages = long_messages(5)
+        messages = long_messages(20)
         result = compact(
             "model",
             messages,
-            400,
+            1500,
             provider=FakeProvider(),
             task_state=TaskState(goal="Create the files and verify them."),
         )
@@ -214,6 +219,23 @@ class CompactionTests(unittest.TestCase):
         recent = result[3:]
         self.assertEqual(recent[0]["role"], "assistant")
         assert_tool_integrity(self, result)
+
+    def test_preservation_boundary_moves_when_all_groups_are_recent(self) -> None:
+        messages = long_messages(2)
+        result = compact(
+            "model",
+            messages,
+            186,
+            provider=FakeProvider(),
+            task_state=TaskState(goal="Create the files and verify them."),
+        )
+        summary = next(
+            message
+            for message in result
+            if message.get("text", "").startswith(SUMMARY_PREFIX)
+        )
+        self.assertIn("earlier", summary["text"])
+        assert_tool_integrity(self, result, require_calls=False)
 
     def test_orphaned_tool_result_stops_compaction(self) -> None:
         messages = [
@@ -288,6 +310,38 @@ class CompactionTests(unittest.TestCase):
         self.assertTrue(
             any("summary truncated" in item.get("text", "") for item in result)
         )
+
+    def test_fixed_context_reserve_counts_against_the_budget(self) -> None:
+        messages = long_messages(5)
+        provider = FakeProvider()
+        events: list[RunEvent] = []
+        compact(
+            "model",
+            messages,
+            500,
+            provider=provider,
+            reserve_tokens=100,
+            on_event=events.append,
+        )
+        self.assertEqual(len(provider.calls), 1)
+        self.assertGreaterEqual(events[-1].before_tokens or 0, 500)
+        self.assertLessEqual(events[-1].after_tokens or 0, 500)
+        self.assertTrue(events[-1].compaction_succeeded)
+
+    def test_reserve_alone_over_budget_fails_without_provider(self) -> None:
+        provider = FakeProvider()
+        events: list[RunEvent] = []
+        with self.assertRaises(CompactionError):
+            compact(
+                "model",
+                [{"role": "user", "text": "hi"}],
+                100,
+                provider=provider,
+                reserve_tokens=100,
+                on_event=events.append,
+            )
+        self.assertEqual(provider.calls, [])
+        self.assertFalse(events[-1].compaction_succeeded)
 
     def test_impossible_budget_fails_clearly(self) -> None:
         messages = long_messages(5)

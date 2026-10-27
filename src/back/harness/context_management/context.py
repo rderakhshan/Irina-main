@@ -327,6 +327,10 @@ def _message_groups(
 
 def _select_slices(
     messages: list[dict[str, Any]],
+    *,
+    budget_tokens: int | None = None,
+    reserve_tokens: int = 0,
+    task_state: TaskState | None = None,
 ) -> tuple[
     list[dict[str, Any]],
     str,
@@ -372,6 +376,44 @@ def _select_slices(
         for index in range(len(groups))
         if index not in recent_indices and index != task_group_index
     ]
+    if not older_indices and recent_indices:
+        # KEEP_RECENT is a target. Move the preservation boundary older when
+        # the recent slice consumed every non-task group, otherwise there is
+        # nothing to summarize and compaction cannot reduce the context.
+        older_indices = [recent_indices.pop(0)]
+
+    if budget_tokens is not None:
+        task_group_for_budget = groups[task_group_index]
+        state_message = None
+        if task_state is not None:
+            state_message = {
+                "role": "user",
+                "text": f"[Task state]\n{task_state.render()}",
+            }
+        task_tokens = estimate_tokens(task_group_for_budget)
+        state_tokens = (
+            estimate_tokens([state_message]) if state_message is not None else 0
+        )
+        summary_allowance = max(128, min(512, budget_tokens // 3))
+        margin = max(8, budget_tokens // 50)
+        target = max(1, budget_tokens - margin)
+        available = (
+            target
+            - reserve_tokens
+            - int((task_tokens + state_tokens) * 2.0)
+            - summary_allowance
+        )
+        while recent_indices:
+            recent_messages = [
+                message
+                for index in recent_indices
+                for message in groups[index]
+            ]
+            if int(estimate_tokens(recent_messages) * 2.0) <= available:
+                break
+            older_indices.append(recent_indices.pop(0))
+        older_indices = sorted(set(older_indices))
+
     if not older_indices:
         raise CompactionError("no older history is available to summarize")
 
@@ -514,17 +556,20 @@ def compact(
     provider: Provider | None = None,
     task_state: TaskState | None = None,
     on_event: Callable[[RunEvent], None] | None = None,
+    reserve_tokens: int = 0,
 ) -> list[dict[str, Any]]:
     """Compact older history when the transcript exceeds ``budget_tokens``.
 
     Args:
         model: Model identifier used for the one summarization call.
         messages: Neutral transcript. It is not mutated.
-        budget_tokens: Estimated message-token budget.
+        budget_tokens: Estimated context-token budget, including any reserve.
         provider: Existing provider used for the summary. Required when
             compaction is needed.
         task_state: Session state to preserve outside the summary.
         on_event: Optional callback for a ``context_compacted`` event.
+        reserve_tokens: Estimated fixed system/tool context that is not part of
+            ``messages``. It is counted against the same budget.
 
     Returns:
         The original list when it fits, otherwise a new message list.
@@ -535,7 +580,21 @@ def compact(
     if budget_tokens <= 0:
         raise CompactionError("budget_tokens must be positive")
 
-    before = estimate_tokens(messages)
+    reserve = max(0, int(reserve_tokens))
+    if reserve >= budget_tokens:
+        reason = "fixed system/tool context alone exceeds the budget"
+        _emit_compaction(
+            on_event,
+            before=reserve,
+            after=None,
+            summarized=0,
+            preserved=0,
+            success=False,
+            reason=reason,
+        )
+        raise CompactionError(reason)
+
+    before = estimate_tokens(messages) + reserve
     if before <= budget_tokens:
         return list(messages)
 
@@ -556,7 +615,12 @@ def compact(
     preserved = 0
     after: int | None = None
     try:
-        task_group, original_task, older, recent = _select_slices(messages)
+        task_group, original_task, older, recent = _select_slices(
+            messages,
+            budget_tokens=budget_tokens,
+            reserve_tokens=reserve,
+            task_state=task_state,
+        )
         summarized = len(older)
         preserved = len(task_group) + len(recent)
 
@@ -606,7 +670,7 @@ def compact(
             compacted = _build_compacted(
                 task_group, current_summary, task_state, recent
             )
-            after = estimate_tokens(compacted)
+            after = estimate_tokens(compacted) + reserve
             if after <= target:
                 break
             if attempt >= MAX_REDUCTION_ATTEMPTS:
@@ -645,6 +709,8 @@ def compact(
         raise
 
     reason = "compacted older history"
+    if len(recent) < KEEP_RECENT:
+        reason += " (preservation boundary moved to fit)"
     if current_summary != summary:
         reason += " (summary truncated to fit)"
     _emit_compaction(

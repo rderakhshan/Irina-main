@@ -1,0 +1,16 @@
+[memory]
+enabled = true
+backend = "evolvelab"
+active_provider = "lightweight_memory"
+learn_after_task = true
+retrieve_before_task = true
+max_context_tokens = 3000
+
+[memory.provider_config.lightweight_memory]
+enable_longterm_provision = true
+top_k_longterm = 3
+
+[memory.evolution]
+enabled = false
+auto_promote = false
+require_approval = true

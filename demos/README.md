@@ -215,6 +215,29 @@ The live text-only measurement above used `max_tokens=2048`; it is not a claim
 about network latency in every environment. Browser interaction is not part of
 this demo.
 
+## Stage 6: EvolveLab memory
+
+`stage6_memory.py` exercises the vendored EvolveLab integration without the
+OpenShell tool demo. It reports all 13 providers individually, can run a real
+ExpeL memory update/retrieval, and reports the honest MemEvolve dependency
+status.
+
+```powershell
+uv run python demos/stage6_memory.py --providers
+uv run python demos/stage6_memory.py --memory --provider expel
+uv run python demos/stage6_memory.py --memory --provider lightweight_memory --fake
+uv run python demos/stage6_memory.py --evolution
+```
+
+`--memory` uses a controlled canonical coding experience, then calls the real
+upstream provider. `--provider lightweight_memory --fake` is deterministic;
+`--provider expel` uses the optional `memory-research` extra and the configured
+DeepSeek model. `--evolution` reports the missing FlashOAgents dependencies
+instead of pretending to run MemEvolve.
+
+Actual observed ExpeL check in this checkout: `update=True`, canonical count
+`1`, retrieval returned `967` characters of labeled historical context.
+
 ## Setup
 
 Demos load the ignored `.env` at the repo root:

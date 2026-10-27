@@ -8,13 +8,16 @@ Stage 2 adds three capabilities to the existing harness:
 
 The code lives in this package rather than at the harness root so the existing
 `context_management` area stays the single home for context-related work.
+The `memory/` subpackage now also contains canonical experience storage and the
+vendored EvolveLab/MemEvolve integration; see [memory/README.md](memory/README.md).
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
 | `context.py` | Token estimate, one-call compaction, task state, events. |
-| `memory.py` | Base system prompt, `IRINA.md` loading, `remember`, memory tool. |
+| `memory/legacy.py` | Base system prompt, `IRINA.md` loading, `remember`, memory tool. |
+| `memory/` | Canonical experiences, EvolveLab adapters, replay/evolution bridges, vendored upstream source. |
 | `skills.py` | Catalog, front-matter parsing, `read_skill`, `use_skill` tool. |
 | `__init__.py` | Public exports for the rest of the harness. |
 
@@ -151,7 +154,7 @@ python -m unittest tests.test_context tests.test_memory tests.test_skills tests.
 python demos/stage2_context_memory_skills.py
 ```
 
-Current results: **147 tests, OK** with 2 Windows symlink skips. The live Stage 2
+Current full offline suite: **270 tests, OK** with 2 Windows symlink skips. The live Stage 2
 demo passed:
 
 - **A:** five files, correct manifest, independent `wc -l` check, three

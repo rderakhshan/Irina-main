@@ -8,7 +8,9 @@ project memory, and loadable skills. Stage 3 added durable sessions, truthful
 crash recovery, sequential sub-agents, and one central `Harness`. Stage 4 adds
 the interactive/headless CLI, parallel fleet execution, artifact download, and
 three real product builds. Stage 5 adds genuine provider streaming and a
-polished event-driven terminal UI.
+polished event-driven terminal UI. Stage 6 vendors EvolveLab/MemEvolve and adds
+canonical experience storage, retrieval/update hooks, architecture replay, and
+safe memory-evolution bridges.
 
 The harness uses only the Python standard library. It does not use an agent
 framework or a vendor SDK. The repo targets Python 3.13; the harness code uses
@@ -38,6 +40,13 @@ features available from Python 3.10.
 - A semantic terminal theme, Markdown-aware streaming renderer, progress
   indicators, tool lifecycle display, plain/redirected mode, and serialized
   fleet presentation.
+- Canonical, architecture-independent experience storage with redaction,
+  idempotent ingestion, recovery, workspace isolation, and versioned schemas.
+- Vendored original EvolveLab/MemEvolve source, a provider registry, memory
+  retrieval/update hooks, architecture replay/registry, coding evaluation
+  fixtures, and a safe candidate-validation bridge.
+- Original Lightweight Memory and ExpeL provider integration; optional
+  research dependencies remain isolated from ordinary Irina execution.
 - A parallel fleet runner with isolated workspaces, ordered results, per-job
   failure isolation, optional review/repair phases, and metadata.
 - Artifact download from an owned OpenShell sandbox before cleanup.
@@ -55,8 +64,10 @@ also passed. Stage 4 produced `taskman/`, `artisan-coffee/`, and `viper/` throug
 real DeepSeek + OpenShell runs. `taskman` completed both build and review with 19
 tests passing. The two web projects met their mechanical checks, but their runs
 ended at `token_budget` before a completed review; browser interaction was not
-automated. The full local suite is 259 tests; 9 of them use real OpenShell
-sandboxes and verify isolation plus crash recovery.
+automated. The offline suite is 270 tests, OK (2 skipped). The repository
+contains 279 tests total; 9 use real OpenShell sandboxes and could not be rerun
+during final memory verification because the local Docker service was
+unavailable.
 
 Stage 5 live streaming checks:
 - A real DeepSeek text-only stream delivered 92 deltas: first delta at 11.392s,
@@ -86,6 +97,7 @@ the exact caveats.
 | Harness | How a run is put together and how to use it | [src/back/harness/README.md](src/back/harness/README.md) |
 | CLI and fleet | Interactive/headless CLI, parallel jobs, artifact download | [Stage 4 in the harness README](src/back/harness/README.md#stage-4-cli-fleet-and-artifacts) |
 | Streaming UI | Real streaming, theme, Markdown, progress, fleet display | [Stage 5 in the harness README](src/back/harness/README.md#stage-5-streaming-and-terminal-ui) |
+| Memory / EvolveLab | Vendored providers, canonical experience history, replay, evolution bridge | [Memory README](src/back/harness/context_management/memory/README.md) |
 | Loop | Turn order, stop conditions, completion, events | [src/back/harness/loop/README.md](src/back/harness/loop/README.md) |
 | Providers | DeepSeek settings, message mapping, retries | [src/back/harness/providers/README.md](src/back/harness/providers/README.md) |
 | Tools and guardrails | Six tools, permission policy, shell, OpenShell | [src/back/harness/tools_and_guardrails/README.md](src/back/harness/tools_and_guardrails/README.md) |
@@ -202,6 +214,25 @@ python demos/stage5_streaming.py --live --plain
 `--text` measures provider deltas without tools; `--live` runs the full
 OpenShell tool task.
 
+Memory is opt-in in ordinary CLI runs. The original source is vendored, and
+the active provider can be inspected or selected explicitly:
+
+```powershell
+uv run python main.py memory status
+uv run python main.py memory providers
+uv run python main.py memory --workdir . inspect
+uv run python main.py memory select lightweight_memory
+uv run python main.py -p "Fix the failing test" --mode yolo --memory
+uv run python main.py -p "Fix the failing test" --mode yolo --memory --memory-provider expel
+```
+
+Canonical experiences live under `~/.irina/memory` by default. Install the
+optional provider/research set with `uv sync --extra memory-research` (or
+`--extra memory-embeddings` for sentence-transformer providers). EvolveLab
+providers with missing optional research dependencies are reported as blocked;
+source presence is not treated as availability. MemEvolve evolution requires the
+additional FlashOAgents dependency set and is not silently replaced.
+
 ## Layout
 
 ```
@@ -218,6 +249,10 @@ src/back/harness/orchestration/cli.py
 src/back/harness/orchestration/fleet.py
                                     Parallel isolated jobs and result ordering
 src/back/harness/utils/             Terminal theme, formatting, Markdown, renderer, fleet UI
+src/back/harness/context_management/memory/
+                                    Canonical experience store, EvolveLab adapters,
+                                    provider registry, architecture/replay,
+                                    evaluation, and vendored MemEvolve source
 src/back/harness/context_management/
                                     Compaction, memory, skills, task state
 demos/                              Runnable examples and live checks
@@ -245,8 +280,13 @@ Stage 5 streaming redaction uses a bounded cross-chunk buffer for known
 credential markers. It is not a guarantee for arbitrary unknown secrets in
 model-generated prose. Terminal control sequences are stripped only for display;
 session history remains the source of truth. Stage 5 has no full-screen TUI and
-no artificial typing delay. Stage 4 has a real CLI and a parallel fleet, but no
-queue, distributed workers, database, or production multi-tenant scheduler. Fleet jobs are independent
+no artificial typing delay. Memory retrieval is lower-trust prompt context, not
+authorization. The canonical store is host-side. EvolveLab providers may need
+optional research dependencies; only tested providers are claimed available.
+MemEvolve's original engine is vendored but unavailable here until its
+FlashOAgents dependency set is installed. Stage 4 has a real CLI and parallel
+fleet, but no queue, distributed workers, database, or production multi-tenant
+scheduler. Fleet jobs are independent
 process-level jobs; child agents inside one Harness still run sequentially.
 Resuming requires the original OpenShell sandbox and workspace; if they are gone,
 the harness reports that limitation instead of creating a replacement and

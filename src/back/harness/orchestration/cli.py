@@ -27,6 +27,11 @@ from ..loop.state import RunResult
 from .session import SessionError
 from ..tools_and_guardrails.security import Policy, redact_secrets
 from ..utils import TerminalRenderer, Theme
+from ..context_management.memory import (
+    DeepSeekMemoryModel,
+    MemoryConfig,
+    MemoryManager,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -106,6 +111,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--plain",
         action="store_true",
         help="Automation mode: no color, no spinner, ASCII fallbacks.",
+    )
+    parser.add_argument(
+        "--memory",
+        dest="memory",
+        action="store_true",
+        default=None,
+        help="Enable canonical memory and the configured EvolveLab provider.",
+    )
+    parser.add_argument(
+        "--no-memory",
+        dest="memory",
+        action="store_false",
+        help="Disable memory even when configuration enables it.",
+    )
+    parser.add_argument(
+        "--memory-provider",
+        default=None,
+        help="Explicit EvolveLab provider identifier.",
     )
     parser.add_argument(
         "--max-turns",
@@ -484,6 +507,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     try:
+        memory_config = MemoryConfig.load()
+        if args.memory is not None:
+            memory_config.enabled = bool(args.memory)
+        if args.memory_provider:
+            memory_config.active_provider = args.memory_provider
+            if args.memory is None:
+                memory_config.enabled = True
+        if memory_config.enabled:
+            memory_manager = MemoryManager(
+                memory_config,
+                workspace=args.workdir,
+                model=DeepSeekMemoryModel(harness.provider, harness.model),
+            )
+            harness.memory = memory_manager
+            args.memory_manager = memory_manager
+    except Exception as exc:
+        renderer.error(
+            "Memory cannot start: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return 2
+
+    try:
         _try_resume(harness, args)
     except SessionError as exc:
         renderer.error(f"Resume failed: {exc}")
@@ -494,27 +540,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    if not interactive:
-        return _run_headless(harness, args.prompt, args)
     try:
-        workspace = harness.workspace
-    except Exception as exc:
-        renderer.error(
-            "Irina cannot start the execution environment: "
-            f"{type(exc).__name__}: {exc}"
+        if not interactive:
+            return _run_headless(harness, args.prompt, args)
+        try:
+            workspace = harness.workspace
+        except Exception as exc:
+            renderer.error(
+                "Irina cannot start the execution environment: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            return 2
+        renderer.banner(
+            model=harness.model,
+            workspace=workspace,
+            mode=harness.policy.mode,
+            session=(
+                str(harness.session_path) if harness.session_path else None
+            ),
         )
-        return 2
-    renderer.banner(
-        model=harness.model,
-        workspace=workspace,
-        mode=harness.policy.mode,
-        session=(
-            str(harness.session_path) if harness.session_path else None
-        ),
-    )
-    renderer.info("Type a task, or 'exit' to quit.")
-    args._irina_banner = True
-    return _run_interactive(harness, args)
+        renderer.info("Type a task, or 'exit' to quit.")
+        args._irina_banner = True
+        return _run_interactive(harness, args)
+    finally:
+        memory_manager = getattr(args, "memory_manager", None)
+        if memory_manager is not None:
+            try:
+                memory_manager.close()
+            except Exception:
+                pass
 
 
 __all__ = [

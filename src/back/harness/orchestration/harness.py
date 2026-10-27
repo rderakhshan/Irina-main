@@ -113,6 +113,7 @@ class Harness:
         max_tool_calls: int = 200,
         max_total_tokens: int = 600_000,
         stream: bool = False,
+        memory_manager: Any | None = None,
         completion_validator: (
             Callable[[Any, list[dict[str, Any]]], bool] | None
         ) = None,
@@ -145,6 +146,9 @@ class Harness:
         self.max_tool_calls = max_tool_calls
         self.max_total_tokens = max_total_tokens
         self.stream = bool(stream)
+        self.memory = memory_manager
+        self._memory_context = ""
+        self._run_index = 0
         self._completion_validator = completion_validator
         self._should_cancel = should_cancel
         self.enable_subagents = enable_subagents
@@ -336,6 +340,66 @@ class Harness:
         self._reserve_tokens = self._fixed_tokens(self._system, self._tools)
         self._ready = True
 
+    def _emit_memory(
+        self,
+        *,
+        phase: str,
+        text: str,
+        count: int | None = None,
+        ok: bool | None = None,
+    ) -> None:
+        if self._user_on_event is None:
+            return
+        provider = getattr(
+            getattr(self.memory, "config", None), "active_provider", ""
+        )
+        try:
+            self._user_on_event(
+                RunEvent(
+                    type=EventType.MEMORY,
+                    turn=0,
+                    text=text,
+                    memory_provider=str(provider or ""),
+                    memory_phase=phase,
+                    memory_count=count,
+                    memory_ok=ok,
+                )
+            )
+        except Exception:
+            pass
+
+    def _apply_memory_context(self, task: str) -> None:
+        """Retrieve lower-trust memory and rebuild the system prompt if needed."""
+        if self.memory is None:
+            return
+        try:
+            context = self.memory.before_task(task)
+        except Exception:
+            context = ""
+        self._memory_context = context or ""
+        extra = self._system_extra
+        if self._memory_context:
+            extra = extra + "\n\n" + self._memory_context
+        self._system = build_system_prompt(
+            self._workspace,
+            extra=extra,
+            workspace=self._backend,
+            platform_name=getattr(self._backend, "platform_name", None),
+        )
+        self._reserve_tokens = self._fixed_tokens(self._system, self._tools)
+        if self._memory_context:
+            count = len(getattr(self.memory, "last_retrieval", []) or [])
+            self._emit_memory(
+                phase="retrieve",
+                text=(
+                    f"Retrieved {count} relevant experience(s)"
+                    if count
+                    else "Retrieved historical memory"
+                ),
+                count=count,
+                ok=True,
+            )
+
     @staticmethod
     def _fixed_tokens(system: str, tools: dict[str, Tool]) -> int:
         """Estimate fixed system/tool context for compaction accounting."""
@@ -370,6 +434,7 @@ class Harness:
             max_tool_calls=self._child_max_tool_calls,
             max_total_tokens=self.max_total_tokens,
             stream=self.stream,
+            memory_manager=self.memory,
             completion_validator=None,
             should_cancel=self._should_cancel,
             max_subagent_depth=self.max_subagent_depth,
@@ -513,6 +578,11 @@ class Harness:
         self._recorder.tool_calls = data.tool_calls
         self._recorder.status = data.status
         self._recorder.seed_user_messages(self._messages)
+        self._run_index = sum(
+            1
+            for record in data.records
+            if record.get("type") == "run_end"
+        )
         record_resume(candidate)
         return True
 
@@ -554,6 +624,7 @@ class Harness:
             )
 
         self._ensure_ready()
+        self._apply_memory_context(task)
         if self._task_state is None:
             self._task_state = TaskState(goal=task)
         elif not self._task_state.goal:
@@ -631,7 +702,51 @@ class Harness:
             self._recorder.record_run_end(result)
         self._session_status = result.status.value
         self._last_result = result
+        self._ingest_memory(task, result)
         return result
+
+    def _ingest_memory(self, task: str, result: RunResult) -> None:
+        """Persist canonical experience and update memory without failing the run."""
+        if self.memory is None or self._depth != 0:
+            return
+        try:
+            from ..context_management.memory.trajectory_bridge import (
+                record_from_result,
+            )
+
+            self._run_index += 1
+            session_id = (
+                self._session_path.stem if self._session_path else None
+            )
+            record = record_from_result(
+                task=task,
+                result=result,
+                workspace=self.workdir,
+                session_path=self._session_path,
+                session_id=session_id,
+                run_index=self._run_index,
+                task_state=self._task_state,
+            )
+            result = self.memory.after_task(record)
+            if result is not None:
+                self._emit_memory(
+                    phase="update",
+                    text=(
+                        "Experience saved"
+                        if result.ok
+                        else f"Experience update failed: {result.error}"
+                    ),
+                    count=1 if result.ok else 0,
+                    ok=bool(result.ok),
+                )
+        except Exception as exc:
+            # Memory must never corrupt an already-completed task.
+            self._emit_memory(
+                phase="update",
+                text=f"Memory update failed: {type(exc).__name__}: {exc}",
+                ok=False,
+            )
+            return
 
     def close(self) -> None:
         """Delete an owned sandbox and release the Harness.

@@ -80,6 +80,17 @@ class ParserTests(unittest.TestCase):
         self.assertTrue(args.stream)
         self.assertIsNone(args.color)
         self.assertFalse(args.plain)
+        self.assertIsNone(args.memory)
+        self.assertIsNone(args.memory_provider)
+
+    def test_memory_flags_are_explicit(self) -> None:
+        parser = cli.build_parser()
+        args = parser.parse_args(
+            ["--memory", "--memory-provider", "expel"]
+        )
+        self.assertTrue(args.memory)
+        self.assertEqual(args.memory_provider, "expel")
+        self.assertFalse(parser.parse_args(["--no-memory"]).memory)
 
     def test_resume_accepts_latest_or_explicit_session(self) -> None:
         parser = cli.build_parser()

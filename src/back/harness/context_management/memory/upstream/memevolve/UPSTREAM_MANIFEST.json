@@ -1,0 +1,42 @@
+{
+  "upstream": {
+    "repository": "https://github.com/bingreeky/MemEvolve",
+    "commit": "6035d5659d7a092dbfa6a87b1a32a3cee652ba54",
+    "commit_date": "2026-05-05T17:29:28+08:00",
+    "commit_subject": "Update README",
+    "paper": "https://arxiv.org/html/2512.18746v1",
+    "license": "Apache-2.0",
+    "copied_at": "2026-10-27",
+    "source_paths": [
+      "EvolveLab/",
+      "MemEvolve/",
+      "FlashOAgents/",
+      "storage/tools/",
+      "base_agent.py",
+      "evolve_cli.py",
+      "utils.py",
+      "requirements.txt",
+      "LICENSE",
+      "README.md",
+      "LICENSE-FLASH-SEARCHER"
+    ],
+    "omitted": [
+      "research datasets and generated benchmark outputs",
+      "Hugging Face/model-weight caches",
+      "assets and screenshots",
+      "mini-swe-agent and unrelated Flash-Searcher runners",
+      "download-only/example data"
+    ],
+    "modified_upstream_files": [
+      "EvolveLab/providers/__init__.py"
+    ],
+    "compatibility_patches": [
+      "Lazy provider exports avoid importing optional research dependencies when a dependency-free provider is selected."
+    ]
+  },
+  "notes": [
+    "The upstream source is vendored at the recorded commit, except for the one documented compatibility patch.",
+    "Irina-specific adapters live outside this directory.",
+    "Some providers need optional research dependencies; import availability is reported by the registry."
+  ]
+}

@@ -27,13 +27,11 @@ DENY_PATTERNS: tuple[str, ...] = (
     r"(?=[^\n]*\s(?:-[A-Za-z]*f[A-Za-z]*|--force)\b)"
     r"[^\n]*\s[\"']?(?:/\*|/|~|\$HOME|/home(?:/[^/\s\"']+)?)"
     r"[\"']?(?=\s|$|;|&)",
-    r"(?:^|[;&|(])\s*sudo\b",
-    r"(?:^|[;&|(])\s*mkfs(?:\.[a-z0-9]+)?\b",
-    r"(?:^|[;&|(])\s*dd\b[^\n]*\bif\s*=",
-    r"(?:^|[;&|(])\s*(?:curl|wget)\b[^\n|]*\|"
-    r"\s*(?:sudo\s+)?(?:sh|bash|zsh|dash)\b",
-    r"(?:^|[;&|(])\s*git\s+push\b[^\n]*(?:--force(?:-with-lease)?|-f)\b",
-    r"(?:>{1,2}|\btee\b)\s*/dev/sd[a-z]",
+    r"\bsudo\b",
+    r"\bmkfs(?:\.[a-z0-9]+)?\b",
+    r"\bdd\b[^\n]*\bif\s*=",
+    r"\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash)\b",
+    r"\bgit\s+push\b[^\n]*(?:--force(?:-with-lease)?|-f)\b",    r"(?:>{1,2}|\btee\b)\s*/dev/sd[a-z]",
     # PowerShell and Windows command variants.
     r"\bRemove-Item\b[^\n]*(?:-Recurse|-Force|\s-[rR]\b)",
     r"\bRemove-Item\b[^\n]*(?:[A-Za-z]:\\|\\\*|~|\$HOME)",

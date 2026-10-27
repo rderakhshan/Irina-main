@@ -142,6 +142,15 @@ def _decode_json(raw: bytes) -> dict[str, Any]:
     return payload
 
 
+def urlopen(request: urllib.request.Request, timeout: float) -> Any:
+    """Open one HTTP request through ``urllib.request``.
+
+    This small indirection keeps the network boundary mockable at the module
+    level while still delegating to the standard library.
+    """
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
 def _post(
     url: str,
     body: dict[str, Any],
@@ -187,7 +196,7 @@ def _post(
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urlopen(request, timeout=timeout) as response:
                 raw = response.read()
             return _decode_json(raw)
         except urllib.error.HTTPError as exc:
@@ -493,7 +502,7 @@ class DeepSeekProvider:
         retries: int = DEFAULT_RETRIES,
     ) -> None:
         resolved_key = api_key if api_key is not None else os.environ.get("DEEPSEEK_API_KEY")
-        if resolved_key is None or not resolved_key.strip():
+        if not isinstance(resolved_key, str) or not resolved_key.strip():
             raise RuntimeError(
                 "DEEPSEEK_API_KEY is not set. Export the key before creating "
                 "DeepSeekProvider; credentials are never read from source files."

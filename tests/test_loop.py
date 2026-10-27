@@ -20,6 +20,7 @@ from src.back.harness.loop.state import RunStatus
 from src.back.harness.loop.termination import TerminationPolicy
 from src.back.harness.providers.base import (
     ProviderHTTPError,
+    ProviderInvalidResponse,
     ProviderResponse,
     ProviderRetryExhausted,
     TokenUsage,
@@ -226,6 +227,13 @@ class CompletionTests(unittest.TestCase):
         )
         result, _, _ = execute(provider)
         self.assertIs(result.status, RunStatus.INVALID_RESPONSE)
+
+    def test_content_filter_is_classified_as_blocked(self) -> None:
+        provider = ScriptedProvider(
+            [make_response("filtered", finish_reason="content_filter")]
+        )
+        result, _, _ = execute(provider)
+        self.assertIs(result.status, RunStatus.BLOCKED)
 
     def test_empty_responses_are_retried_within_the_limit(self) -> None:
         provider = ScriptedProvider([make_response(""), make_response("Answer")])
@@ -586,6 +594,32 @@ class LimitTests(unittest.TestCase):
             tool_messages(messages)[-1]["text"], "BLOCKED: run cancelled"
         )
 
+    def test_consecutive_tool_errors_terminate_the_run(self) -> None:
+        tool = RecordingTool("echo")
+        provider = ScriptedProvider(
+            [
+                make_response(
+                    tool_calls=[
+                        make_call("c1", "missing"),
+                        make_call("c2", "missing"),
+                        make_call("c3", "missing"),
+                    ]
+                )
+            ]
+        )
+        result, messages, _ = execute(
+            provider,
+            tools={"echo": tool},
+            policy=default_policy(max_consecutive_tool_errors=2),
+        )
+
+        self.assertIs(result.status, RunStatus.TOOL_ERROR)
+        self.assertEqual(len(tool_messages(messages)), 3)
+        self.assertEqual(
+            tool_messages(messages)[-1]["text"],
+            "BLOCKED: consecutive tool error limit reached",
+        )
+
 
 class ErrorAndAccountingTests(unittest.TestCase):
     def test_provider_error_produces_explicit_failure(self) -> None:
@@ -604,6 +638,13 @@ class ErrorAndAccountingTests(unittest.TestCase):
 
         self.assertIs(result.status, RunStatus.PROVIDER_ERROR)
         self.assertIn("retries exhausted", result.reason)
+
+    def test_invalid_provider_response_maps_to_invalid_response(self) -> None:
+        provider = ScriptedProvider([ProviderInvalidResponse("missing choices")])
+        result, _, _ = execute(provider)
+
+        self.assertIs(result.status, RunStatus.INVALID_RESPONSE)
+        self.assertIn("missing choices", result.reason)
 
     def test_usage_accumulates_across_model_calls(self) -> None:
         tool = RecordingTool("echo")

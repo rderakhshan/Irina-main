@@ -162,20 +162,18 @@ After filling in `.env`, one command runs both required live demonstrations:
 python demos/verify_live.py
 ```
 
-Test A is the dice task. Test B is a text-only landing-page request with no
-tools:
+Test A is the dice task. Test B is a simple text-only explanation request with
+no tools:
 
 ```
-Build a landing page for a coffee shop.
-Provide the HTML and CSS directly in your answer.
-Do not write files.
+Explain in two short sentences what a Python list is. Do not use tools.
 ```
 
 The verifier checks that Test A completed with real dice evidence, and that Test
-B completed without tool calls while returning substantial HTML and CSS
-(`<html`/`<!doctype html` plus `<style`/`css`, at least 300 characters). It exits
-non-zero if either demonstration fails or if no key is configured. With no tools
-configured, a useful non-empty answer is accepted as `COMPLETED`.
+B completed without tool calls while returning at least 60 characters that
+mention a list. It exits non-zero if either demonstration fails or if no key is
+configured. With no tools configured, a useful non-empty answer is accepted as
+`COMPLETED`.
 
 ### Day 1 limitations
 

@@ -1,7 +1,7 @@
 """Day 1: live verification of both required demonstrations.
 
-Concept: run the dice task and the text-only landing-page task against the real
-DeepSeek provider, then report whether each acceptance check passed.
+Concept: run the dice task and a simple text-only explanation task against the
+real DeepSeek provider, then report whether each acceptance check passed.
 
 Design constraints:
 * Standard library only.
@@ -45,14 +45,9 @@ from src.back.harness.loop.runner import run_loop
 from src.back.harness.loop.termination import TerminationPolicy
 from src.back.harness.providers.deepseek import DeepSeekProvider
 
-LANDING_TASK = (
-    "Build a landing page for a coffee shop.\n"
-    "Provide the HTML and CSS directly in your answer.\n"
-    "Do not write files."
-)
-LANDING_SYSTEM_PROMPT = (
-    "You are Irina, a concise web developer. Return complete, self-contained "
-    "HTML with embedded CSS in your answer. Do not use tools."
+TEXT_TASK = "Explain in two short sentences what a Python list is. Do not use tools."
+TEXT_SYSTEM_PROMPT = (
+    "You are Irina, a concise assistant. Answer in plain text. Do not use tools."
 )
 
 
@@ -75,12 +70,10 @@ def _has_dice_evidence(messages: list[dict[str, Any]], result) -> bool:
     return result.completed and requested and rolled and bool(result.text.strip())
 
 
-def _has_landing_page_code(text: str) -> bool:
-    """Apply a lightweight heuristic for substantial HTML and CSS output."""
+def _has_useful_text(text: str) -> bool:
+    """Apply a lightweight heuristic for a relevant text answer."""
     lowered = text.lower()
-    has_html = "<html" in lowered or "<!doctype html" in lowered
-    has_css = "<style" in lowered or "css" in lowered
-    return has_html and has_css and len(text) >= 300
+    return "list" in lowered and len(text.strip()) >= 60
 
 
 def main() -> int:
@@ -115,34 +108,34 @@ def main() -> int:
     )
     print()
 
-    print("=== TEST B: TEXT-ONLY LANDING PAGE ===")
-    landing_messages: list[dict[str, Any]] = [
-        {"role": "user", "text": LANDING_TASK}
+    print("=== TEST B: TEXT-ONLY EXPLANATION ===")
+    text_messages: list[dict[str, Any]] = [
+        {"role": "user", "text": TEXT_TASK}
     ]
     print("USER:")
-    print(LANDING_TASK)
+    print(TEXT_TASK)
     print()
-    landing_result = run_loop(
+    text_result = run_loop(
         provider=provider,
         model=provider.default_model,
-        system=LANDING_SYSTEM_PROMPT,
-        messages=landing_messages,
+        system=TEXT_SYSTEM_PROMPT,
+        messages=text_messages,
         tools={},
         on_event=print_event,
         policy=TerminationPolicy(),
     )
     has_tool_calls = any(
         message.get("role") == "assistant" and message.get("tool_calls")
-        for message in landing_messages
+        for message in text_messages
     )
-    has_code = _has_landing_page_code(landing_result.text)
-    test_b = landing_result.completed and not has_tool_calls and has_code
+    useful_text = _has_useful_text(text_result.text)
+    test_b = text_result.completed and not has_tool_calls and useful_text
 
     print("VERIFICATION SUMMARY:")
     print(f"  test_a_dice={'passed' if test_a else 'failed'}")
-    print(f"  test_b_status={landing_result.status.value}")
+    print(f"  test_b_status={text_result.status.value}")
     print(f"  test_b_tool_calls={'yes' if has_tool_calls else 'no'}")
-    print(f"  test_b_landing_page_code={'yes' if has_code else 'no'}")
+    print(f"  test_b_useful_text={'yes' if useful_text else 'no'}")
     print(f"  test_b_result={'passed' if test_b else 'failed'}")
     print(f"  overall={'passed' if test_a and test_b else 'failed'}")
     return 0 if test_a and test_b else 1

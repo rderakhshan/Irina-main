@@ -22,7 +22,9 @@ features available from Python 3.10.
 - Live checks for the Day 1 tasks and the Day 2 OpenShell tasks.
 
 The Day 1 live check passed against DeepSeek for both tasks. The Day 2 acceptance
-demo passed Fibonacci, destructive-command, and workspace-escape checks.
+demo passed Fibonacci, destructive-command, and workspace-escape checks. The full
+local suite is 100 tests; 8 of them use a real OpenShell sandbox and verify
+filesystem, network, process, and credential isolation.
 
 ## Start here
 

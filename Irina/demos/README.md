@@ -69,6 +69,39 @@ Last verified run: Test A passed with `832040`; Test B passed with a direct
 policy block and a civil refusal; Test C passed with a direct tool rejection and
 no `/etc/passwd` contents. The sandbox was deleted.
 
+## Stage 2: context, memory, and skills
+
+`stage2_context_memory_skills.py` runs three live checks through the existing
+loop and OpenShell:
+
+1. **Long task with compaction:** create `one.txt` through `five.txt`, read each
+   back, verify with `wc -l`, and write `MANIFEST.md` under a 1,500-token context
+   budget. The check requires at least one successful `context_compacted` event,
+   correct files, correct manifest, and a real `wc -l` result. This check
+   registers only `read_file`, `write_file`, and `bash` so the fixed tool-schema
+   context fits the small budget.
+2. **Durable memory:** store `project codename: lighthouse-42` with `remember()`,
+   stop and start the sandbox workspace, build a fresh system prompt, and ask a
+   new conversation for the codename.
+3. **Skill loading:** create `skills/brand-voice/SKILL.md` at runtime, discover
+   it, load it with `use_skill`, and verify the final writing follows the skill.
+   No Python code changes are made.
+
+```powershell
+python demos/stage2_context_memory_skills.py
+```
+
+Optional: run one check with `a`, `b`, or `c`. The demo deletes its sandboxes.
+
+Last verified run: **A, B, and C passed**. Test A recorded three successful
+compactions, preserved valid tool-call pairs, and passed an independent `wc -l`
+check. Test B answered from `IRINA.md` in a fresh conversation. Test C loaded the
+pirate-voice skill and followed it.
+
+The Stage 2 demo uses the same prerequisites as the Day 2 demo, and the
+[context, memory, and skills README](../src/back/harness/context_management/README.md)
+has the design details.
+
 ## Setup
 
 Demos load the ignored `.env` at the repo root:

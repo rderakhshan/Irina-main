@@ -8,6 +8,10 @@ gateway and create a real sandbox; they skip when OpenShell is unavailable.
 python -m unittest discover -s tests -v
 ```
 
+Current run: **100 tests, OK** (1 skip for Windows symlink creation). Eight of
+those tests use a real OpenShell sandbox; that class creates one sandbox and
+deletes it afterwards.
+
 ## What is covered
 
 `test_deepseek.py`:

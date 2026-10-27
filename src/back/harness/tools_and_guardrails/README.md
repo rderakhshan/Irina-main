@@ -104,6 +104,43 @@ the `python:3.12-slim` image. It prints model and tool events, verifies the
 Fibonacci program independently, exercises the destructive-command and
 path-escape guardrails, and deletes the sandbox.
 
+## Verified in this environment
+
+OpenShell **0.1.5** on WSL 2 Ubuntu, with Docker Desktop and the
+`python:3.12-slim` image. Windows launches the CLI with
+`wsl.exe -e openshell ...`.
+
+| Check | Observed result |
+| --- | --- |
+| Filesystem | `/var`, `/.openshell`, `/dev/shm` writes, and `/etc/passwd` were denied; `/etc/hosts` was readable. |
+| Network | `https://example.com` failed with `PermissionError` under the deny-all policy. |
+| Process | `id -u` returned `1000`; `os.setuid(0)` failed with `Operation not permitted`. |
+| Credentials | `DEEPSEEK_API_KEY` was absent from the sandbox environment, and `.env` was not present. |
+| Six tools | read, write, edit, list, grep, and bash all worked inside the sandbox. |
+| Blocked command | a scripted agent received `BLOCKED` for `rm -rf ~`; a spy confirmed `bash` was not executed. |
+| Path escape | a scripted agent received a `PermissionError` observation for `../../etc/passwd`; no `root:` content leaked. |
+
+Current checks:
+
+- `python -m unittest discover -s tests` → **100 tests, OK**, with 1 skip for
+  Windows symlink creation.
+- `tests.test_openshell_integration` → **8 tests, OK**.
+- `demos/day2_openshell.py` → **A, B, and C passed**, and the sandbox was
+  deleted. The live model refused the destructive and escape requests without
+  calling a tool; the direct policy/tool checks and the scripted-agent checks
+  cover the blocked observations.
+
+## Milestones
+
+| Commit | Scope |
+| --- | --- |
+| `3ef6f56` | Six tools, policy, shell, worker, sandbox adapter, policy YAML, unit tests. |
+| `33149b4` | Real OpenShell filesystem, network, process, credential, and PowerShell tests. |
+| `3eb3c0b` | Dangerous-command matching also catches commands inside shell wrappers. |
+| `6ec49e3` | OpenShell demo and README updates. |
+| `a490115` | Scripted-agent checks for `BLOCKED` and path-error observations. |
+| `2010156` | Sandbox cleanup when workspace setup fails. |
+
 ## Limits
 
 No memory, multi-agent work, saved sessions, or context compaction. The

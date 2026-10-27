@@ -65,6 +65,10 @@ Exit codes: `0` all checks passed, `1` a check failed, `2` a prerequisite or key
 was missing. See the [tools and guardrails README](../src/back/harness/tools_and_guardrails/README.md)
 for the policy and sandbox details.
 
+Last verified run: Test A passed with `832040`; Test B passed with a direct
+policy block and a civil refusal; Test C passed with a direct tool rejection and
+no `/etc/passwd` contents. The sandbox was deleted.
+
 ## Setup
 
 Demos load the ignored `.env` at the repo root:

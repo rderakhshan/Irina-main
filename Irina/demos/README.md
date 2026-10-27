@@ -102,6 +102,40 @@ The Stage 2 demo uses the same prerequisites as the Day 2 demo, and the
 [context, memory, and skills README](../src/back/harness/context_management/README.md)
 has the design details.
 
+## Stage 3: sequential sub-agents and sessions
+
+`stage3_subagents.py` uses the central `Harness` and a real OpenShell sandbox. A
+scripted provider makes the delegation sequence deterministic; the files, test
+run, policy, session, and sandbox are real.
+
+```powershell
+python main.py
+# or
+python demos/stage3_subagents.py
+```
+
+It asks the parent to call `spawn_agent` twice:
+
+1. one child writes `utils.py` with `slugify`;
+2. a second child writes `test_utils.py` with five assertions;
+3. the parent runs `python3 test_utils.py` itself and reports the observed output.
+
+The demo verifies two spawn calls, both files, five assertions, the parent's test
+run, exactly one top-level session, and no child session. It deletes the sandbox
+and leaves the session under the ignored `.irina/` state directory.
+
+Last verified run: passed. The parent observed `5 assertions passed`, and the
+session recorded `completed`.
+
+Crash recovery has a separate OpenShell integration test:
+`tests/test_stage3_integration.py`. A worker process writes a file and exits
+before its tool result is recorded; a fresh `Harness` resumes the session, sees
+the unknown-outcome observation, inspects the existing file, and completes
+without replaying the write.
+
+This Stage 3 demo is deterministic and does not need an API key. The live
+DeepSeek model variant of the Stage 3 acceptance task was not run.
+
 ## Setup
 
 Demos load the ignored `.env` at the repo root:

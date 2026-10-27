@@ -3,8 +3,9 @@
 The harness runs one conversation from start to finish. It asks the model for a
 reply, runs any tools the model asks for, and stops for a clear reason.
 
-Day 1 is deliberately small: one loop, one model adapter, one tool in the demo,
-and no memory or extra agents.
+The loop is deliberately small. Day 1 added one model adapter and a dice demo;
+Day 2 adds six workspace tools and an OpenShell sandbox without changing the
+loop.
 
 ## Files
 
@@ -15,6 +16,7 @@ and no memory or extra agents.
 | `loop/termination.py` | Sets limits for turns, tools, time, tokens, repeats, and failures. |
 | `providers/base.py` | Defines what a provider must implement and the shared data types. |
 | `providers/deepseek.py` | Talks to the DeepSeek Chat Completions API. |
+| `tools_and_guardrails/` | Six workspace tools, permission policy, shell, and OpenShell adapter. |
 
 ## How a run works
 
@@ -69,6 +71,10 @@ Unknown tools, bad arguments, and tool exceptions become error results. They do
 not crash the run. Every tool call gets exactly one matching tool result before
 the next model request.
 
+Day 2 uses `tools_and_guardrails/` for its six tools. The caller passes
+`Policy.check` as the `before_tool` hook, and the demo runs the tools inside
+OpenShell. The loop itself is unchanged.
+
 ## Limits
 
 The defaults are in `loop/termination.py`: 40 turns, 100 tool calls, 300 seconds,
@@ -83,6 +89,7 @@ complete.
 
 - [Loop](loop/README.md) — turn order, completion rules, events.
 - [Providers](providers/README.md) — model adapter and retries.
-- [Demos](../../../demos/README.md) — dice demo and live check.
+- [Tools and guardrails](tools_and_guardrails/README.md) — six tools, policy, OpenShell.
+- [Demos](../../../demos/README.md) — dice demo, live check, OpenShell workspace demo.
 - [Tests](../../../tests/README.md) — offline test coverage.
 - [Project overview](../../../README.md) — the short version.

@@ -83,10 +83,16 @@ def _iter_files(workdir: Path):
 
 
 def _read_file(workdir: Path, path: str, max_lines: int) -> dict[str, Any]:
-    """Read a text file and return the first ``max_lines`` lines plus the total."""
+    """Read a text file and return up to ``max_lines`` lines plus the total.
+
+    Files that fit are returned byte-for-text, including a trailing newline, so
+    callers such as the skills loader receive the complete file contents.
+    """
     target = resolve_path(workdir, path)
     text = target.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
+    if len(lines) <= max_lines:
+        return {"text": text, "total_lines": len(lines)}
     return {
         "text": "\n".join(lines[:max_lines]),
         "total_lines": len(lines),

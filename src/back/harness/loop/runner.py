@@ -48,6 +48,7 @@ class EventType(str, Enum):
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
     RUN_END = "run_end"
+    CONTEXT_COMPACTED = "context_compacted"
 
 
 @dataclass
@@ -63,6 +64,11 @@ class RunEvent:
         result: Tool result text for tool-end events.
         status: Terminal status for run-end events.
         reason: Human-readable explanation for run-end events.
+        before_tokens: Estimated tokens before context compaction.
+        after_tokens: Estimated tokens after context compaction.
+        summarized_messages: Original messages replaced by a summary.
+        preserved_messages: Original messages kept after compaction.
+        compaction_succeeded: Whether a compaction attempt succeeded.
     """
 
     type: EventType
@@ -73,6 +79,11 @@ class RunEvent:
     result: str | None = None
     status: RunStatus | None = None
     reason: str = ""
+    before_tokens: int | None = None
+    after_tokens: int | None = None
+    summarized_messages: int = 0
+    preserved_messages: int = 0
+    compaction_succeeded: bool | None = None
 
 
 def _emit(

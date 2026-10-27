@@ -156,6 +156,11 @@ class OpenShellSandbox:
         """Return whether the adapter currently holds a running sandbox."""
         return self._started
 
+    @property
+    def platform_name(self) -> str:
+        """Return the platform visible inside the sandbox."""
+        return "Linux"
+
     @classmethod
     def is_available(cls) -> bool:
         """Return whether the CLI and gateway are usable on this machine."""

@@ -400,6 +400,60 @@ class OpenShellSandbox:
             "grep", regex=regex, pattern=pattern, limit=limit
         )
 
+    def download(
+        self,
+        sandbox_path: str | Path,
+        destination: str | Path,
+    ) -> Path:
+        """Download one workspace file or directory to the host.
+
+        The source is restricted to the approved sandbox workspace. The host
+        destination is created below its parent if needed. This is used to
+        retrieve build artifacts before an owned sandbox is deleted.
+        """
+        if not self._started:
+            raise SandboxError("sandbox is not started")
+        if not self.workspace:
+            raise SandboxError("sandbox workspace is not initialized")
+        source = self._workspace_source(sandbox_path)
+        target = Path(destination).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        result = self._cli(
+            [
+                "sandbox",
+                "download",
+                self.name,
+                source,
+                self._wsl_path(target),
+            ],
+            timeout=300,
+        )
+        if result.returncode != 0:
+            raise SandboxError(
+                f"failed to download {source!r} from sandbox {self.name!r}: "
+                f"{_decode(result.stderr).strip()}"
+            )
+        return target
+
+    download_file = download
+
+    def _workspace_source(self, path: str | Path) -> str:
+        """Resolve a download source and reject workspace escapes."""
+        assert self.workspace is not None
+        raw = str(path)
+        source = posixpath.normpath(
+            raw
+            if raw.startswith("/")
+            else posixpath.join(self.workspace, raw)
+        )
+        root = posixpath.normpath(self.workspace)
+        if source != root and not source.startswith(root.rstrip("/") + "/"):
+            raise SandboxError(
+                "sandbox path must be inside the approved workspace: "
+                f"{raw!r}"
+            )
+        return source
+
     def stop(self) -> None:
         """Delete the sandbox, or stop it when ``keep`` is set.
 

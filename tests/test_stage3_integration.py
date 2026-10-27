@@ -14,7 +14,7 @@ from src.back.harness.providers.base import (
     TokenUsage,
     ToolCall,
 )
-from src.back.harness.session import latest, load
+from src.back.harness.orchestration.session import latest, load
 from src.back.harness.tools_and_guardrails import (
     OpenShellSandbox,
     Policy,

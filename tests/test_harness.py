@@ -17,7 +17,7 @@ from src.back.harness.providers.base import (
     TokenUsage,
     ToolCall,
 )
-from src.back.harness.session import (
+from src.back.harness.orchestration.session import (
     SessionError,
     append,
     latest,
@@ -240,6 +240,28 @@ class RunAndSessionTests(HarnessTestCase):
         self.assertEqual(assistant["tool_calls"][0]["id"], "call-1")
         self.assertEqual(tool["tool_call_id"], "call-1")
         self.assertIn("a.txt", data.task_state.modified_files)
+        harness.close()
+
+    def test_continue_task_appends_to_the_same_completed_session(self) -> None:
+        provider = ScriptedProvider([response("first"), response("second")])
+        harness = self.make_harness(provider)
+        first = harness.run("first task")
+        second = harness.continue_task("review task")
+        self.assertTrue(first.completed)
+        self.assertTrue(second.completed)
+        self.assertEqual(second.text, "second")
+        data = load(harness.session_path)
+        self.assertEqual(data.status, "completed")
+        self.assertEqual(
+            sum(record["type"] == "run_end" for record in data.records), 2
+        )
+        user_texts = [
+            message["text"]
+            for message in data.messages
+            if message.get("role") == "user"
+        ]
+        self.assertEqual(user_texts, ["first task", "review task"])
+        self.assertEqual(len(provider.calls), 2)
         harness.close()
 
     def test_persist_false_creates_no_session(self) -> None:

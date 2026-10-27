@@ -30,7 +30,7 @@ from src.back.harness.providers.base import (
     TokenUsage,
     ToolCall,
 )
-from src.back.harness.session import load
+from src.back.harness.orchestration.session import load
 from src.back.harness.tools_and_guardrails import (
     Policy,
     SandboxError,

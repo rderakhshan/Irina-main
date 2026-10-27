@@ -16,6 +16,10 @@ from .base import (
     ProviderInvalidResponse,
     ProviderResponse,
     ProviderRetryExhausted,
+    ProviderStreamError,
+    ProviderStreamEvent,
+    StreamEventType,
+    StreamingProvider,
     TokenUsage,
     ToolCall,
 )
@@ -31,6 +35,10 @@ __all__ = [
     "ProviderInvalidResponse",
     "ProviderResponse",
     "ProviderRetryExhausted",
+    "ProviderStreamError",
+    "ProviderStreamEvent",
+    "StreamEventType",
+    "StreamingProvider",
     "TokenUsage",
     "ToolCall",
 ]

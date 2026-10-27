@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .tools_and_guardrails.tools import Tool, tool
+from ..tools_and_guardrails.tools import Tool, tool
 
 MAX_RESULT_CHARS = 12000
 

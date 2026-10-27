@@ -6,7 +6,7 @@ import unittest
 
 from src.back.harness.loop.state import RunResult, RunStatus
 from src.back.harness.providers.base import TokenUsage
-from src.back.harness.subagent import DelegationBudget, subagent_tool
+from src.back.harness.orchestration.subagent import DelegationBudget, subagent_tool
 
 
 def make_result(

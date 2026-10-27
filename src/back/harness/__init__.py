@@ -1,19 +1,16 @@
-"""Stage 3: Irina harness composition, durable sessions, and sub-agents.
+"""Irina harness.
 
-Concept: the harness is still a small synchronous execution kernel. Stage 3 adds
-one composition class, trusted host-side session history, truthful crash repair,
-and sequential child agents.
-
-Design constraints:
-* Standard library only and synchronous.
-* Provider-specific behaviour stays inside ``providers``.
-* Sessions live outside the agent-writable workspace.
-* The public surface re-exports the composition and existing tool contracts.
+The package root exposes the stable public surface. Control-plane logic lives
+in ``orchestration``; ``__main__`` and ``cli`` provide the command-line entry.
 """
 
-from .harness import Harness, HarnessError
-from .session import (
+from .orchestration import (
     SESSION_DIR,
+    DelegationBudget,
+    FleetError,
+    FleetJob,
+    Harness,
+    HarnessError,
     SessionData,
     SessionError,
     SessionLocked,
@@ -24,13 +21,16 @@ from .session import (
     new_session,
     record_resume,
     recovery_path,
+    run_fleet,
+    subagent_tool,
     workspace_session_dir,
 )
-from .subagent import DelegationBudget, subagent_tool
 from .tools_and_guardrails import Policy, Tool, tool
 
 __all__ = [
     "DelegationBudget",
+    "FleetError",
+    "FleetJob",
     "Harness",
     "HarnessError",
     "Policy",
@@ -46,6 +46,7 @@ __all__ = [
     "new_session",
     "record_resume",
     "recovery_path",
+    "run_fleet",
     "subagent_tool",
     "tool",
     "workspace_session_dir",

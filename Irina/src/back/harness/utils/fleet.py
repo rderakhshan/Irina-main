@@ -113,6 +113,11 @@ class FleetRenderer:
                     f"  {self.theme.paint(role, self.theme.mark(role))} "
                     f"{prefix} {self.theme.paint(role, status.value)}"
                 )
+            elif event.type is EventType.MEMORY:
+                self._write(
+                    f"  {self.theme.paint('notice', self.theme.mark('notice'))} "
+                    f"{prefix} {self.theme.paint('dim', one_line(event.text, 120))}"
+                )
             elif event.type is EventType.CONTEXT_COMPACTED:
                 self._write(
                     f"  {self.theme.paint('notice', self.theme.mark('notice'))} "

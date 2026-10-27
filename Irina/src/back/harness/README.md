@@ -24,6 +24,8 @@ interactive/headless CLI, parallel fleet execution, and artifact download.
 | `utils/markdown.py` | Incremental Markdown presentation. |
 | `utils/renderer.py` | Streaming event renderer and progress indicator. |
 | `utils/fleet.py` | Serialized, job-prefixed concurrent fleet output. |
+| `context_management/memory/` | Canonical experience history, EvolveLab adapter, registry, replay, evolution/evaluation bridges. |
+| `memory/upstream/memevolve/` | Vendored original MemEvolve/EvolveLab source at the recorded commit. |
 | `loop/runner.py` | Runs turns, handles tool calls, emits events. |
 | `loop/state.py` | Defines run statuses, the result object, and counters. |
 | `loop/termination.py` | Sets limits for turns, tools, time, tokens, repeats, and failures. |
@@ -287,7 +289,43 @@ python demos/stage5_streaming.py --live --plain
 - Safe write: visibly blocked; `false`: visibly failed; `--plain`: no ANSI.
 - Controlled cancellation: session status `interrupted`, zero tools executed.
 - Fleet display: serialized prefixed output in the synthetic demo.
-- Full suite: 259 tests, OK (2 skipped).
+- Offline suite: 270 tests, OK (2 skipped). Nine real OpenShell tests were not rerun because the local Docker service was unavailable.
+
+## Stage 6: EvolveLab and canonical memory
+
+The original MemEvolve repository is vendored at commit
+`6035d5659d7a092dbfa6a87b1a32a3cee652ba54` under
+`context_management/memory/upstream/memevolve/`, with Apache-2.0 licenses,
+manifest, and compatibility notes. The provider adapter uses the real
+`take_in_memory`, `provide_memory`, and `initialize` methods.
+
+Irina adds:
+
+- a stable `MemoryBackend` adapter;
+- a canonical, append-only experience store with stable IDs, schema versioning,
+  redaction, recovery, idempotency, and workspace isolation;
+- a trajectory bridge that preserves tool IDs and labels outcomes from observed
+  evidence rather than assistant prose;
+- bounded, lower-trust retrieval injection into the system prompt;
+- post-task updates with an audit ledger and nonfatal failure handling;
+- an architecture registry, canonical replay, rollback, coding evaluation
+  fixtures, candidate safety checks, and a lazy bridge to the original
+  MemEvolve engine.
+
+Available/tested here:
+
+- `lightweight_memory`: original upstream provider, initialized and integrated.
+- `expel`: original upstream provider, imported with the `memory-research`
+  extra and exercised with a real DeepSeek memory model.
+- Canonical + ExpeL live memory check: update succeeded, canonical count 1,
+  retrieval returned 967 characters of labeled historical context.
+
+The remaining providers are discovered with separate source/import/init/
+integration statuses. Missing optional dependencies are reported as blocked.
+Memory is opt-in for the harness/CLI. MemEvolve evolution is vendored but its
+optional FlashOAgents dependency set is not installed in this environment;
+`memory evolve` reports the exact blocker rather than substituting a prompt-only
+implementation.
 
 ## Limits
 
@@ -316,6 +354,13 @@ streamed with line/structural buffering, not a full terminal Markdown renderer.
 The cross-chunk redactor is bounded and documented; it does not claim absolute
 secret detection. Streaming usage is zero when the provider omits usage rather
 than being invented.
+
+Stage 6 limits: only tested providers are claimed integrated. Optional research
+dependencies and the FlashOAgents engine dependency set are isolated. Candidate
+validation currently uses static AST checks plus a separate-process import
+smoke test, not a complete OpenShell execution sandbox. Promotion is explicit;
+canonical replay is supported, but provider-specific direct migration is not
+implemented.
 
 ## More detail
 

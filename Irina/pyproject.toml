@@ -8,3 +8,18 @@ dependencies = [
     "pip>=26.2.2",
     "torch>=2.0",
 ]
+
+[project.optional-dependencies]
+memory-research = [
+    "openai>=1.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "jinja2>=3.0",
+    "rich>=13.0",
+    "json-repair>=0.30",
+    "numpy>=1.26",
+    "scikit-learn>=1.5",
+]
+memory-embeddings = [
+    "sentence-transformers>=3.0",
+]

@@ -309,6 +309,20 @@ class TerminalRenderer:
             )
             return
 
+        if event.type is EventType.MEMORY:
+            self._progress.stop()
+            self._flush_assistant()
+            provider = one_line(event.memory_provider or "memory", 40)
+            phase = event.memory_phase or "memory"
+            text = redacted(event.text or phase)
+            self._line(
+                f"  {self.theme.paint('notice', self.theme.mark('notice'))} "
+                f"{self.theme.paint('notice', phase)}  "
+                f"{self.theme.paint('tool', provider)}  "
+                f"{self.theme.paint('dim', text)}"
+            )
+            return
+
         if event.type is EventType.CONTEXT_COMPACTED:
             self._progress.stop()
             self._flush_assistant()

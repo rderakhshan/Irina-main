@@ -51,6 +51,7 @@ class EventType(str, Enum):
 
     ASSISTANT = "assistant"
     ASSISTANT_DELTA = "assistant_delta"
+    MEMORY = "memory"
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
     RUN_END = "run_end"
@@ -76,6 +77,10 @@ class RunEvent:
         preserved_messages: Original messages kept after compaction.
         compaction_succeeded: Whether a compaction attempt succeeded.
         usage: Accumulated token usage for a run-end event, when available.
+        memory_provider: Provider identifier for memory lifecycle events.
+        memory_phase: Memory phase, such as retrieve or update.
+        memory_count: Number of retrieved/updated items, when measured.
+        memory_ok: Whether the memory operation succeeded, when known.
     """
 
     type: EventType
@@ -92,6 +97,10 @@ class RunEvent:
     preserved_messages: int = 0
     compaction_succeeded: bool | None = None
     usage: TokenUsage | None = None
+    memory_provider: str = ""
+    memory_phase: str = ""
+    memory_count: int | None = None
+    memory_ok: bool | None = None
 
 
 def _emit(

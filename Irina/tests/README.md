@@ -8,10 +8,11 @@ gateway and create a real sandbox; they skip when OpenShell is unavailable.
 python -m unittest discover -s tests -v
 ```
 
-Current run: **259 tests, OK** (2 skips for Windows symlink creation). Nine of
-those tests use real OpenShell sandboxes: the Stage 1 integration class and the
-Stage 3 crash/resume test. Stage 4 live product runs and Stage 5 live streaming
-checks are separate; see the demo README.
+Current offline run: **270 tests, OK** (2 skips for Windows symlink creation).
+The repository contains **279 tests**; the remaining 9 use real OpenShell
+sandboxes and were not rerun during final memory verification because the local
+Docker service was unavailable. Stage 4/5/6 live checks are separate; see the
+demo and memory READMEs.
 
 ## What is covered
 
@@ -166,6 +167,17 @@ checks are separate; see the demo README.
 - workspace escape rejection
 - started-sandbox and CLI-failure handling
 
+`test_memory_integration.py`:
+
+- canonical store idempotency, torn-tail recovery, isolation, redaction, corruption
+- evidence-based trajectory conversion and stable experience IDs
+- bounded lower-trust retrieval context
+- all 13 upstream provider status probes and actual Lightweight/ExpeL integration
+- MemoryManager canonical-before-provider update lifecycle
+- Harness memory retrieval/update hooks
+- architecture activation/rollback and canonical replay without source loss
+- candidate static/isolated checks, coding evaluation fixtures, and honest evolution status
+
 `test_streaming.py`:
 
 - DeepSeek SSE text deltas, finish reasons, and usage
@@ -220,11 +232,18 @@ Stage 4 checks:
 python -m unittest tests.test_cli tests.test_fleet tests.test_sandbox_download tests.test_stage4_projects -v
 ```
 
-Stage 5 checks:
+Stage 5/6 checks:
 
 ```powershell
 python -m unittest tests.test_streaming -v
+python -m unittest tests.test_memory_integration -v
 python -m unittest tests.test_loop tests.test_harness tests.test_cli -v
+```
+
+Use `uv run` for the optional ExpeL/evolution dependency set:
+
+```powershell
+uv run python -m unittest tests.test_memory_integration -v
 ```
 
 The Stage 4 product proof is a live run, not an offline test:

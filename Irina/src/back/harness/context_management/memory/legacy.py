@@ -18,10 +18,10 @@ import platform
 import re
 from typing import Any
 
-from .skills import catalog_prompt
-from ..tools_and_guardrails.sandbox import SandboxError
-from ..tools_and_guardrails.security import contains_secret, redact_secrets
-from ..tools_and_guardrails.tools import LocalWorkspace, Tool, tool
+from ..skills import catalog_prompt
+from ...tools_and_guardrails.sandbox import SandboxError
+from ...tools_and_guardrails.security import contains_secret, redact_secrets
+from ...tools_and_guardrails.tools import LocalWorkspace, Tool, tool
 
 MEMORY_FILE = "IRINA.md"
 MAX_MEMORY_CHARS = 20_000

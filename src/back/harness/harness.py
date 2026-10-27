@@ -1,0 +1,615 @@
+"""Stage 3: central Harness composition, sessions, and sub-agents.
+
+Concept: ``Harness`` wires the existing loop, provider, tools, policy, context
+engine, memory, skills, sessions, and OpenShell adapter. It owns coordination,
+not a second implementation of any of those components.
+
+Design constraints:
+* One synchronous run at a time; standard library only.
+* Sessions are trusted host-side JSONL and separate from working context.
+* `safe` permissions are the default; OpenShell remains the execution boundary.
+* Child agents share the parent backend, policy, and delegation budget.
+* The existing ``RunResult`` contract is preserved.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Callable
+
+from .context_management.context import (
+    TaskState,
+    TaskStateObserver,
+    compact,
+    estimate_tokens,
+)
+from .context_management.memory import build_system_prompt, memory_tools
+from .context_management.skills import skill_tools
+from .loop.runner import RunEvent, run_loop
+from .loop.state import RunResult
+from .loop.termination import TerminationPolicy
+from .providers.base import Provider
+from .providers.deepseek import DEFAULT_MODEL, DeepSeekProvider
+from .session import (
+    SessionData,
+    SessionError,
+    SessionRecorder,
+    latest,
+    load,
+    new_session,
+    record_resume,
+    workspace_session_dir,
+)
+from .subagent import DelegationBudget, subagent_tool
+from .tools_and_guardrails.sandbox import OpenShellSandbox, SandboxError
+from .tools_and_guardrails.security import Policy
+from .tools_and_guardrails.tools import Tool, core_tools
+
+
+class HarnessError(RuntimeError):
+    """A Harness configuration or lifecycle failure."""
+
+
+class Harness:
+    """Compose Irina's existing components behind one small API.
+
+    Args:
+        workdir: Approved host workspace used for session identity.
+        model: Model identifier. Defaults to the provider's model.
+        policy: Policy instance or mode string. Defaults to ``Policy("safe")``.
+        extra_tools: Extra tools to merge after core tools. Duplicate names are
+            rejected.
+        system_extra: Extra system-prompt instructions.
+        on_event: Optional user event callback.
+        budget_tokens: Working-context token budget.
+        max_turns: Maximum turns for a top-level run.
+        session_path: Optional explicit session path.
+        enable_subagents: Register ``spawn_agent``.
+        persist: Create/append a durable top-level session.
+        _depth: Internal agent depth; children are greater than zero.
+        provider: Optional injected provider (tests or alternate adapter).
+        workspace_backend: Optional existing workspace/sandbox backend.
+        sandbox: Optional existing OpenShell sandbox.
+        sandbox_workspace: Workspace name inside a new sandbox.
+        state_dir: Trusted host state root for sessions.
+        max_seconds: Elapsed-time limit per run.
+        max_tool_calls: Tool-call limit per run.
+        max_total_tokens: Loop token limit per run.
+        completion_validator: Optional task completion policy.
+        should_cancel: Optional cancellation probe.
+        max_subagent_depth: Maximum nesting depth.
+        max_subagent_tasks: Total delegated tasks across the tree.
+        child_max_turns: Turn limit per child.
+        child_max_seconds: Time limit per child.
+        child_max_tool_calls: Tool-call limit per child.
+        child_budget_tokens: Context budget per child.
+        delegation_budget: Optional shared delegated-work counter.
+        owns_sandbox: Whether ``close`` should delete the sandbox.
+    """
+
+    def __init__(
+        self,
+        workdir: str | Path = ".",
+        model: str | None = None,
+        policy: Policy | str | None = None,
+        extra_tools: Any = None,
+        system_extra: str = "",
+        on_event: Callable[[RunEvent], None] | None = None,
+        budget_tokens: int = 600_000,
+        max_turns: int = 120,
+        session_path: str | Path | None = None,
+        enable_subagents: bool = True,
+        persist: bool = True,
+        _depth: int = 0,
+        *,
+        provider: Provider | None = None,
+        workspace_backend: Any | None = None,
+        sandbox: OpenShellSandbox | None = None,
+        sandbox_workspace: str | None = None,
+        state_dir: str | Path | None = None,
+        max_seconds: float = 300.0,
+        max_tool_calls: int = 200,
+        max_total_tokens: int = 600_000,
+        completion_validator: (
+            Callable[[Any, list[dict[str, Any]]], bool] | None
+        ) = None,
+        should_cancel: Callable[[], bool] | None = None,
+        max_subagent_depth: int = 2,
+        max_subagent_tasks: int = 4,
+        child_max_turns: int = 40,
+        child_max_seconds: float = 120.0,
+        child_max_tool_calls: int = 100,
+        child_budget_tokens: int | None = None,
+        delegation_budget: DelegationBudget | None = None,
+        owns_sandbox: bool | None = None,
+    ) -> None:
+        self.workdir = str(Path(workdir).resolve())
+        self.provider = provider or DeepSeekProvider()
+        self.model = (
+            model
+            or getattr(self.provider, "default_model", None)
+            or DEFAULT_MODEL
+        )
+        if isinstance(policy, str):
+            policy = Policy(policy)
+        self.policy = policy or Policy("safe")
+        self._extra_tools = self._normalise_extra_tools(extra_tools)
+        self._user_on_event = on_event
+        self._system_extra = system_extra
+        self.budget_tokens = budget_tokens
+        self.max_turns = max_turns
+        self.max_seconds = max_seconds
+        self.max_tool_calls = max_tool_calls
+        self.max_total_tokens = max_total_tokens
+        self._completion_validator = completion_validator
+        self._should_cancel = should_cancel
+        self.enable_subagents = enable_subagents
+        self.persist = bool(persist and _depth == 0)
+        self._depth = _depth
+        self._state_dir = state_dir
+        self._session_dir = workspace_session_dir(
+            self.workdir, state_dir=state_dir
+        )
+        self._session_path = (
+            Path(session_path).resolve() if session_path is not None else None
+        )
+        self._session: SessionData | None = None
+        self._session_loaded = False
+        self._session_status: str | None = None
+        self._recorder: SessionRecorder | None = None
+        self._messages: list[dict[str, Any]] = []
+        self._task_state: TaskState | None = None
+        self._task_observer: TaskStateObserver | None = None
+        self._last_result: RunResult | None = None
+
+        self._backend = workspace_backend if workspace_backend is not None else sandbox
+        self._sandbox = (
+            sandbox
+            if sandbox is not None
+            else (
+                workspace_backend
+                if isinstance(workspace_backend, OpenShellSandbox)
+                else None
+            )
+        )
+        self._sandbox_workspace = (
+            sandbox_workspace
+            or getattr(self._backend, "workspace", None)
+        )
+        if owns_sandbox is None:
+            owns_sandbox = workspace_backend is None and sandbox is None
+        self._owns_sandbox = bool(owns_sandbox)
+        self._workspace: str | None = None
+        self._tools: dict[str, Tool] = {}
+        self._system = ""
+        self._reserve_tokens = 0
+        self._ready = False
+
+        self.max_subagent_depth = max_subagent_depth
+        self.max_subagent_tasks = max_subagent_tasks
+        self._child_max_turns = child_max_turns
+        self._child_max_seconds = child_max_seconds
+        self._child_max_tool_calls = child_max_tool_calls
+        self._child_budget_tokens = child_budget_tokens or budget_tokens
+        self._delegation_budget = (
+            delegation_budget
+            if delegation_budget is not None
+            else DelegationBudget(max_tasks=max_subagent_tasks)
+        )
+
+    @staticmethod
+    def _normalise_extra_tools(extra_tools: Any) -> list[Tool]:
+        """Normalise extra tools and validate their basic shape."""
+        if extra_tools is None:
+            return []
+        if isinstance(extra_tools, dict):
+            values = list(extra_tools.values())
+        elif isinstance(extra_tools, Tool):
+            values = [extra_tools]
+        else:
+            values = list(extra_tools)
+        for item in values:
+            if not hasattr(item, "name") or not hasattr(item, "spec"):
+                raise HarnessError(
+                    "extra tools must use the existing Tool interface"
+                )
+        return values
+
+    @property
+    def workspace(self) -> str:
+        """Return the agent's approved workspace path, preparing lazily."""
+        self._ensure_ready()
+        assert self._workspace is not None
+        return self._workspace
+
+    @property
+    def tools(self) -> dict[str, Tool]:
+        """Return a copy of the registered tool map."""
+        self._ensure_ready()
+        return dict(self._tools)
+
+    @property
+    def system_prompt(self) -> str:
+        """Return the assembled system prompt."""
+        self._ensure_ready()
+        return self._system
+
+    @property
+    def messages(self) -> list[dict[str, Any]]:
+        """Return the current working conversation."""
+        return self._messages
+
+    @property
+    def task_state(self) -> TaskState | None:
+        """Return the current session task state."""
+        return self._task_state
+
+    @property
+    def session_path(self) -> Path | None:
+        """Return the active session path, if any."""
+        return self._session_path
+
+    @property
+    def session_status(self) -> str | None:
+        """Return the last recorded run status, if any."""
+        return self._session_status
+
+    @property
+    def session_data(self) -> SessionData | None:
+        """Return the loaded session data, if any."""
+        return self._session
+
+    @property
+    def last_result(self) -> RunResult | None:
+        """Return the most recent run result."""
+        return self._last_result
+
+    def _ensure_ready(self) -> None:
+        """Start/attach the backend, build tools, and assemble the prompt."""
+        if self._ready:
+            return
+        if self._backend is None:
+            self._sandbox = OpenShellSandbox(
+                workspace=self._sandbox_workspace or "irina"
+            )
+            self._sandbox.start()
+            self._backend = self._sandbox
+            self._owns_sandbox = True
+        else:
+            if isinstance(self._backend, OpenShellSandbox):
+                self._sandbox = self._backend
+                if not self._backend.started:
+                    self._backend.start()
+
+        workspace = getattr(self._backend, "workspace", None)
+        if not isinstance(workspace, str) or not workspace:
+            raise HarnessError(
+                "workspace backend does not expose an approved workspace path"
+            )
+        self._workspace = workspace
+
+        tools = core_tools(self._workspace, self._backend)
+        tools.extend(memory_tools(self._workspace, workspace=self._backend))
+        tools.extend(skill_tools(self._workspace, workspace=self._backend))
+        if self.enable_subagents:
+            tools.append(
+                subagent_tool(
+                    self._make_child_harness,
+                    depth=self._depth,
+                    max_depth=self.max_subagent_depth,
+                    budget=self._delegation_budget,
+                )
+            )
+
+        tool_map: dict[str, Tool] = {}
+        for item in tools:
+            if item.name in tool_map:
+                raise HarnessError(f"duplicate tool name: {item.name!r}")
+            tool_map[item.name] = item
+        for item in self._extra_tools:
+            if item.name in tool_map:
+                raise HarnessError(
+                    f"extra tool {item.name!r} would overwrite a registered tool"
+                )
+            tool_map[item.name] = item
+        self._tools = tool_map
+
+        self._system = build_system_prompt(
+            self._workspace,
+            extra=self._system_extra,
+            workspace=self._backend,
+            platform_name=getattr(self._backend, "platform_name", None),
+        )
+        self._reserve_tokens = self._fixed_tokens(self._system, self._tools)
+        self._ready = True
+
+    @staticmethod
+    def _fixed_tokens(system: str, tools: dict[str, Tool]) -> int:
+        """Estimate fixed system/tool context for compaction accounting."""
+        specs = [item.spec for item in tools.values()]
+        return estimate_tokens(
+            [{"role": "system", "text": system}]
+        ) + estimate_tokens(
+            [{"role": "user", "text": json.dumps(specs, ensure_ascii=False)}]
+        )
+
+    def _make_child_harness(self, depth: int) -> "Harness":
+        """Create a fresh child over the parent's backend and policy."""
+        return Harness(
+            workdir=self.workdir,
+            model=self.model,
+            policy=self.policy,
+            extra_tools=self._extra_tools,
+            system_extra=self._system_extra,
+            on_event=None,
+            budget_tokens=self._child_budget_tokens,
+            max_turns=self._child_max_turns,
+            session_path=None,
+            enable_subagents=self.enable_subagents,
+            persist=False,
+            _depth=depth,
+            provider=self.provider,
+            workspace_backend=self._backend,
+            sandbox=self._sandbox,
+            sandbox_workspace=self._workspace,
+            state_dir=self._state_dir,
+            max_seconds=self._child_max_seconds,
+            max_tool_calls=self._child_max_tool_calls,
+            max_total_tokens=self.max_total_tokens,
+            completion_validator=None,
+            should_cancel=self._should_cancel,
+            max_subagent_depth=self.max_subagent_depth,
+            max_subagent_tasks=self.max_subagent_tasks,
+            child_max_turns=self._child_max_turns,
+            child_max_seconds=self._child_max_seconds,
+            child_max_tool_calls=self._child_max_tool_calls,
+            child_budget_tokens=self._child_budget_tokens,
+            delegation_budget=self._delegation_budget,
+            owns_sandbox=False,
+        )
+
+    def _open_session(
+        self,
+        task: str,
+        *,
+        path: Path | None = None,
+    ) -> None:
+        """Create and open a new top-level session."""
+        if self._task_state is None:
+            self._task_state = TaskState(goal=task)
+        label = task[:32] if task.strip() else "session"
+        session_path = new_session(
+            self.workdir,
+            label,
+            state_dir=self._state_dir,
+            sandbox_name=getattr(self._sandbox, "name", None),
+            sandbox_workspace=self._workspace,
+            metadata={"model": self.model, "harness": "stage3"},
+            path=path if path is not None else self._session_path,
+        )
+        self._session_path = session_path
+        self._session_loaded = True
+        self._session_status = "running"
+        self._recorder = SessionRecorder(session_path, self._task_state)
+
+    def resume(self, path: str | Path | None = None) -> bool:
+        """Resume a trusted top-level session for this workspace.
+
+        Args:
+            path: Optional explicit session path inside the trusted store. With
+                no path, the newest resumable session is used.
+
+        Returns:
+            ``True`` when a session was loaded and the backend was restored.
+
+        Raises:
+            SessionError: For an invalid path, wrong workspace, or a sandbox
+                that can no longer be restored.
+        """
+        if not self.persist:
+            return False
+        if self._session_loaded:
+            if path is None:
+                return self._session_status != "completed"
+            if Path(path).resolve() != self._session_path:
+                raise SessionError(
+                    "this Harness is already attached to another session"
+                )
+            return self._session_status != "completed"
+
+        if path is None:
+            candidate = latest(
+                self.workdir,
+                state_dir=self._state_dir,
+                resumable_only=True,
+            )
+            if candidate is None:
+                return False
+        else:
+            candidate = Path(path).resolve()
+            if not candidate.is_relative_to(self._session_dir.resolve()):
+                raise SessionError(
+                    "session path is outside the trusted workspace store"
+                )
+
+        data = load(candidate)
+        if data.metadata.get("workspace") != self.workdir:
+            raise SessionError(
+                "session belongs to a different workspace and cannot be resumed"
+            )
+        if (
+            data.metadata.get("depth", 0) != 0
+            or data.metadata.get("parent") is not None
+        ):
+            raise SessionError("child-agent sessions are not top-level sessions")
+        if data.status == "completed":
+            return False
+
+        metadata_workspace = data.metadata.get("sandbox_workspace")
+        metadata_sandbox = data.metadata.get("sandbox_name")
+        if self._backend is not None:
+            backend_workspace = getattr(self._backend, "workspace", None)
+            if (
+                isinstance(metadata_workspace, str)
+                and isinstance(backend_workspace, str)
+                and metadata_workspace != backend_workspace
+            ):
+                raise SessionError(
+                    "provided workspace does not match the session workspace"
+                )
+            backend_name = getattr(self._backend, "name", None)
+            if (
+                isinstance(metadata_sandbox, str)
+                and isinstance(backend_name, str)
+                and metadata_sandbox != backend_name
+            ):
+                raise SessionError(
+                    "provided sandbox does not match the session sandbox"
+                )
+        elif isinstance(metadata_sandbox, str) and metadata_sandbox:
+            try:
+                self._sandbox = OpenShellSandbox.reattach(
+                    metadata_sandbox,
+                    workspace=metadata_workspace,
+                )
+            except SandboxError as exc:
+                raise SessionError(
+                    "cannot resume session: the original sandbox or workspace "
+                    f"is unavailable: {exc}"
+                ) from exc
+            self._backend = self._sandbox
+            self._sandbox_workspace = metadata_workspace
+            self._owns_sandbox = True
+        else:
+            raise SessionError(
+                "session has no restorable sandbox; pass a workspace_backend"
+            )
+
+        self._messages = list(data.messages)
+        self._task_state = data.task_state
+        self._session = data
+        self._session_path = candidate
+        self._session_status = data.status
+        self._session_loaded = True
+        self._ensure_ready()
+
+        self._recorder = SessionRecorder(candidate, self._task_state)
+        self._recorder.turns = data.turns
+        self._recorder.tool_calls = data.tool_calls
+        self._recorder.status = data.status
+        self._recorder.seed_user_messages(self._messages)
+        record_resume(candidate)
+        return True
+
+    def run(self, task: str) -> RunResult:
+        """Run one task and return the existing structured ``RunResult``."""
+        if not isinstance(task, str) or not task.strip():
+            raise HarnessError("task must be a non-empty string")
+
+        if self.persist and not self._session_loaded and self._session_path:
+            if self._session_path.exists():
+                if not self.resume(self._session_path):
+                    raise SessionError(
+                        "explicit session is completed and cannot be resumed; "
+                        "create a new Harness or session"
+                    )
+
+        if self.persist and self._session_loaded and self._session_status == "completed":
+            raise SessionError(
+                "session is already completed; create a new Harness for a new task"
+            )
+
+        self._ensure_ready()
+        if self._task_state is None:
+            self._task_state = TaskState(goal=task)
+        elif not self._task_state.goal:
+            self._task_state.goal = task
+
+        if self.persist and not self._session_loaded:
+            self._open_session(task)
+
+        message = {"role": "user", "text": task}
+        self._messages.append(message)
+        if self._recorder is not None:
+            self._recorder.record_user(task)
+
+        self._task_observer = TaskStateObserver(self._task_state)
+
+        def on_event(event: RunEvent) -> None:
+            assert self._task_observer is not None
+            self._task_observer(event)
+            if self._recorder is not None:
+                self._recorder.record_event(event)
+            if self._user_on_event is not None:
+                self._user_on_event(event)
+
+        def before_turn(current: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            if self._recorder is not None:
+                self._recorder.sync_user_messages(current)
+            return compact(
+                self.model,
+                current,
+                self.budget_tokens,
+                provider=self.provider,
+                task_state=self._task_state,
+                on_event=on_event,
+                reserve_tokens=self._reserve_tokens,
+            )
+
+        termination = TerminationPolicy(
+            max_turns=self.max_turns,
+            max_tool_calls=self.max_tool_calls,
+            max_seconds=self.max_seconds,
+            max_total_tokens=self.max_total_tokens,
+        )
+
+        try:
+            result = run_loop(
+                provider=self.provider,
+                model=self.model,
+                system=self._system,
+                messages=self._messages,
+                tools=self._tools,
+                on_event=on_event,
+                before_tool=self.policy.check,
+                policy=termination,
+                completion_validator=self._completion_validator,
+                before_turn=before_turn,
+                should_cancel=self._should_cancel,
+            )
+        except Exception as exc:
+            if self._recorder is not None:
+                self._recorder.record_error(exc)
+            self._session_status = "interrupted"
+            raise
+
+        if self._recorder is not None:
+            self._recorder.record_run_end(result)
+        self._session_status = result.status.value
+        self._last_result = result
+        return result
+
+    def close(self) -> None:
+        """Delete an owned sandbox and release the Harness.
+
+        A shared child sandbox or a caller-provided backend is not deleted.
+        """
+        self._ready = False
+        if (
+            self._owns_sandbox
+            and self._sandbox is not None
+            and self._sandbox.started
+        ):
+            self._sandbox.delete()
+
+    def __enter__(self) -> "Harness":
+        self._ensure_ready()
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        self.close()
+        return False
+
+
+__all__ = ["Harness", "HarnessError"]

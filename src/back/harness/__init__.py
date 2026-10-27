@@ -1,11 +1,52 @@
-"""Day 1: Irina agent harness.
+"""Stage 3: Irina harness composition, durable sessions, and sub-agents.
 
-Concept: the harness is a small execution kernel, not a framework. It owns the
-bounded execution loop, explicit run state, and provider-neutral tool protocol.
+Concept: the harness is still a small synchronous execution kernel. Stage 3 adds
+one composition class, trusted host-side session history, truthful crash repair,
+and sequential child agents.
 
 Design constraints:
 * Standard library only and synchronous.
 * Provider-specific behaviour stays inside ``providers``.
-* Later capabilities (memory, orchestration, compaction) are not implemented on
-  Day 1, but the loop and provider contracts leave room for them.
+* Sessions live outside the agent-writable workspace.
+* The public surface re-exports the composition and existing tool contracts.
 """
+
+from .harness import Harness, HarnessError
+from .session import (
+    SESSION_DIR,
+    SessionData,
+    SessionError,
+    SessionLocked,
+    SessionRecorder,
+    append,
+    latest,
+    load,
+    new_session,
+    record_resume,
+    recovery_path,
+    workspace_session_dir,
+)
+from .subagent import DelegationBudget, subagent_tool
+from .tools_and_guardrails import Policy, Tool, tool
+
+__all__ = [
+    "DelegationBudget",
+    "Harness",
+    "HarnessError",
+    "Policy",
+    "SESSION_DIR",
+    "SessionData",
+    "SessionError",
+    "SessionLocked",
+    "SessionRecorder",
+    "Tool",
+    "append",
+    "latest",
+    "load",
+    "new_session",
+    "record_resume",
+    "recovery_path",
+    "subagent_tool",
+    "tool",
+    "workspace_session_dir",
+]

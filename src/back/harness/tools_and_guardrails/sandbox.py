@@ -290,6 +290,49 @@ class OpenShellSandbox:
         sandbox._started = True
         return sandbox
 
+    @classmethod
+    def reattach(cls, name: str, **kwargs: Any) -> "OpenShellSandbox":
+        """Reattach to an existing sandbox, starting it if stopped.
+
+        Unlike :meth:`start`, this never creates a replacement sandbox when the
+        named sandbox is gone. A missing sandbox means the persistent workspace
+        cannot be restored.
+
+        Args:
+            name: Existing sandbox name.
+            **kwargs: Same options as the constructor.
+
+        Returns:
+            A ready adapter.
+
+        Raises:
+            SandboxError: If the sandbox is missing or cannot be started.
+        """
+        sandbox = cls(name=name, **kwargs)
+        sandbox.check_available()
+        info = sandbox._get_sandbox()
+        if info is None:
+            raise SandboxError(
+                f"sandbox {name!r} no longer exists; its workspace cannot be "
+                "restored by creating a new sandbox"
+            )
+        phase = str(info.get("phase", ""))
+        if phase != "Ready":
+            started = sandbox._cli(
+                ["sandbox", "start", name], timeout=sandbox.timeout
+            )
+            if started.returncode != 0:
+                raise SandboxError(
+                    f"sandbox {name!r} is {phase or 'unknown'} and could not "
+                    "be restarted: "
+                    f"{_decode(started.stderr).strip()}"
+                )
+            info = sandbox._wait_ready()
+        sandbox.sandbox_info = info
+        sandbox._setup_workspace(create=False)
+        sandbox._started = True
+        return sandbox
+
     def exec(
         self,
         argv: list[str],
@@ -533,8 +576,8 @@ class OpenShellSandbox:
             return self._wait_ready()
         return payload
 
-    def _setup_workspace(self) -> None:
-        """Create the approved workspace and upload the worker script."""
+    def _setup_workspace(self, *, create: bool = True) -> None:
+        """Create or verify the approved workspace and upload the worker."""
         current = self._exec_cli(
             ["/bin/pwd"], workdir=None, timeout=60
         )
@@ -563,14 +606,24 @@ class OpenShellSandbox:
                 f"{workspace!r} is outside {root!r}"
             )
 
-        made = self._exec_cli(
-            ["/bin/mkdir", "-p", workspace], workdir=None, timeout=60
-        )
-        if made.exit_code != 0:
-            raise SandboxError(
-                f"could not create sandbox workspace {workspace!r}: "
-                f"{made.stderr.strip()}"
+        if create:
+            made = self._exec_cli(
+                ["/bin/mkdir", "-p", workspace], workdir=None, timeout=60
             )
+            if made.exit_code != 0:
+                raise SandboxError(
+                    f"could not create sandbox workspace {workspace!r}: "
+                    f"{made.stderr.strip()}"
+                )
+        else:
+            existing = self._exec_cli(
+                ["/bin/test", "-d", workspace], workdir=None, timeout=20
+            )
+            if existing.exit_code != 0:
+                raise SandboxError(
+                    f"sandbox workspace {workspace!r} is missing; the session "
+                    "workspace cannot be restored"
+                )
 
         uploaded = self._cli(
             [

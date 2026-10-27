@@ -18,19 +18,19 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from .context_management.context import (
+from ..context_management.context import (
     TaskState,
     TaskStateObserver,
     compact,
     estimate_tokens,
 )
-from .context_management.memory import build_system_prompt, memory_tools
-from .context_management.skills import skill_tools
-from .loop.runner import RunEvent, run_loop
-from .loop.state import RunResult
-from .loop.termination import TerminationPolicy
-from .providers.base import Provider
-from .providers.deepseek import DEFAULT_MODEL, DeepSeekProvider
+from ..context_management.memory import build_system_prompt, memory_tools
+from ..context_management.skills import skill_tools
+from ..loop.runner import RunEvent, run_loop
+from ..loop.state import RunResult
+from ..loop.termination import TerminationPolicy
+from ..providers.base import Provider
+from ..providers.deepseek import DEFAULT_MODEL, DeepSeekProvider
 from .session import (
     SessionData,
     SessionError,
@@ -42,9 +42,9 @@ from .session import (
     workspace_session_dir,
 )
 from .subagent import DelegationBudget, subagent_tool
-from .tools_and_guardrails.sandbox import OpenShellSandbox, SandboxError
-from .tools_and_guardrails.security import Policy
-from .tools_and_guardrails.tools import Tool, core_tools
+from ..tools_and_guardrails.sandbox import OpenShellSandbox, SandboxError
+from ..tools_and_guardrails.security import Policy, redact_secrets
+from ..tools_and_guardrails.tools import Tool, core_tools
 
 
 class HarnessError(RuntimeError):
@@ -76,6 +76,7 @@ class Harness:
         max_seconds: Elapsed-time limit per run.
         max_tool_calls: Tool-call limit per run.
         max_total_tokens: Loop token limit per run.
+        stream: Whether to use the provider streaming interface when available.
         completion_validator: Optional task completion policy.
         should_cancel: Optional cancellation probe.
         max_subagent_depth: Maximum nesting depth.
@@ -111,6 +112,7 @@ class Harness:
         max_seconds: float = 300.0,
         max_tool_calls: int = 200,
         max_total_tokens: int = 600_000,
+        stream: bool = False,
         completion_validator: (
             Callable[[Any, list[dict[str, Any]]], bool] | None
         ) = None,
@@ -142,6 +144,7 @@ class Harness:
         self.max_seconds = max_seconds
         self.max_tool_calls = max_tool_calls
         self.max_total_tokens = max_total_tokens
+        self.stream = bool(stream)
         self._completion_validator = completion_validator
         self._should_cancel = should_cancel
         self.enable_subagents = enable_subagents
@@ -265,6 +268,15 @@ class Harness:
         """Return the most recent run result."""
         return self._last_result
 
+    @property
+    def sandbox(self) -> OpenShellSandbox | None:
+        """Return the OpenShell adapter owned or shared by this Harness.
+
+        The adapter is available after :attr:`workspace` or a run has prepared
+        the backend. Callers should not close a shared sandbox themselves.
+        """
+        return self._sandbox
+
     def _ensure_ready(self) -> None:
         """Start/attach the backend, build tools, and assemble the prompt."""
         if self._ready:
@@ -357,6 +369,7 @@ class Harness:
             max_seconds=self._child_max_seconds,
             max_tool_calls=self._child_max_tool_calls,
             max_total_tokens=self.max_total_tokens,
+            stream=self.stream,
             completion_validator=None,
             should_cancel=self._should_cancel,
             max_subagent_depth=self.max_subagent_depth,
@@ -378,7 +391,8 @@ class Harness:
         """Create and open a new top-level session."""
         if self._task_state is None:
             self._task_state = TaskState(goal=task)
-        label = task[:32] if task.strip() else "session"
+        safe_task = redact_secrets(task)
+        label = safe_task[:32] if safe_task.strip() else "session"
         session_path = new_session(
             self.workdir,
             label,
@@ -504,6 +518,20 @@ class Harness:
 
     def run(self, task: str) -> RunResult:
         """Run one task and return the existing structured ``RunResult``."""
+        return self._execute(task, allow_completed=False)
+
+    def continue_task(self, task: str) -> RunResult:
+        """Append a follow-up task to the current session and run it.
+
+        This is for explicit continuation, such as an interactive prompt loop or
+        a second review phase. It never turns a completed run into a crash; it
+        appends a new user message and a new ``run_end`` record to the same
+        session. ``run()`` still refuses a completed session by default.
+        """
+        return self._execute(task, allow_completed=True)
+
+    def _execute(self, task: str, *, allow_completed: bool) -> RunResult:
+        """Shared execution path for initial and follow-up tasks."""
         if not isinstance(task, str) or not task.strip():
             raise HarnessError("task must be a non-empty string")
 
@@ -515,7 +543,12 @@ class Harness:
                         "create a new Harness or session"
                     )
 
-        if self.persist and self._session_loaded and self._session_status == "completed":
+        if (
+            self.persist
+            and self._session_loaded
+            and self._session_status == "completed"
+            and not allow_completed
+        ):
             raise SessionError(
                 "session is already completed; create a new Harness for a new task"
             )
@@ -528,6 +561,10 @@ class Harness:
 
         if self.persist and not self._session_loaded:
             self._open_session(task)
+        elif self._session_loaded:
+            self._session_status = "running"
+            if self._recorder is not None:
+                self._recorder.status = "running"
 
         message = {"role": "user", "text": task}
         self._messages.append(message)
@@ -577,7 +614,13 @@ class Harness:
                 completion_validator=self._completion_validator,
                 before_turn=before_turn,
                 should_cancel=self._should_cancel,
+                stream=self.stream,
             )
+        except KeyboardInterrupt as exc:
+            if self._recorder is not None:
+                self._recorder.record_error(exc)
+            self._session_status = "interrupted"
+            raise
         except Exception as exc:
             if self._recorder is not None:
                 self._recorder.record_error(exc)

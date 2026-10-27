@@ -17,6 +17,7 @@ Design constraints:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Mapping
@@ -27,6 +28,10 @@ from ..providers.base import (
     ProviderInvalidResponse,
     ProviderResponse,
     ProviderRetryExhausted,
+    ProviderStreamEvent,
+    ProviderStreamError,
+    StreamEventType,
+    TokenUsage,
     ToolCall,
 )
 from .state import ExecutionState, RunResult, RunStatus, tool_call_signature
@@ -45,6 +50,7 @@ class EventType(str, Enum):
     """Kinds of structured execution events."""
 
     ASSISTANT = "assistant"
+    ASSISTANT_DELTA = "assistant_delta"
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
     RUN_END = "run_end"
@@ -69,6 +75,7 @@ class RunEvent:
         summarized_messages: Original messages replaced by a summary.
         preserved_messages: Original messages kept after compaction.
         compaction_succeeded: Whether a compaction attempt succeeded.
+        usage: Accumulated token usage for a run-end event, when available.
     """
 
     type: EventType
@@ -84,6 +91,7 @@ class RunEvent:
     summarized_messages: int = 0
     preserved_messages: int = 0
     compaction_succeeded: bool | None = None
+    usage: TokenUsage | None = None
 
 
 def _emit(
@@ -337,6 +345,7 @@ def _finish(
             text=result.text,
             status=status,
             reason=reason,
+            usage=result.usage,
         ),
     )
     return result
@@ -364,6 +373,128 @@ def _completion_decision(
     return None
 
 
+def _streamed_tool_call(
+    index: int,
+    accumulator: dict[str, str],
+) -> ToolCall:
+    """Validate one fully assembled streamed tool call."""
+    call_id = accumulator.get("id", "")
+    name = accumulator.get("name", "")
+    raw_arguments = accumulator.get("arguments", "")
+    if not call_id:
+        raise ProviderInvalidResponse(
+            f"streamed tool call {index} is missing an id"
+        )
+    if not name:
+        raise ProviderInvalidResponse(
+            f"streamed tool call {call_id!r} is missing a name"
+        )
+    args: dict[str, Any] = {}
+    args_error: str | None = None
+    try:
+        parsed = json.loads(raw_arguments or "{}")
+    except (json.JSONDecodeError, ValueError) as exc:
+        args_error = f"invalid JSON arguments: {exc}"
+    else:
+        if isinstance(parsed, dict):
+            args = parsed
+        else:
+            args_error = "tool arguments must decode to a JSON object"
+    return ToolCall(
+        id=call_id,
+        name=name,
+        args=args,
+        args_error=args_error,
+        raw_arguments=raw_arguments,
+    )
+
+
+def _consume_stream(
+    provider: Provider,
+    model: str,
+    system: str,
+    messages: list[dict[str, Any]],
+    specs: list[dict[str, Any]],
+    turn: int,
+    on_event: Callable[[RunEvent], None] | None,
+) -> ProviderResponse:
+    """Consume one provider stream and assemble a normal response.
+
+    Text deltas are emitted immediately. Tool calls remain local until the
+    stream finishes and their JSON arguments validate. No tool is executed
+    here.
+    """
+    stream_method = getattr(provider, "stream", None)
+    if not callable(stream_method):
+        return provider.complete(model, system, messages, specs)
+
+    text_parts: list[str] = []
+    accumulators: dict[int, dict[str, str]] = {}
+    finish_reason = ""
+    usage: TokenUsage | None = None
+
+    for event in stream_method(model, system, messages, specs):
+        if not isinstance(event, ProviderStreamEvent):
+            raise ProviderInvalidResponse(
+                "provider stream yielded a non-ProviderStreamEvent"
+            )
+        if event.type is StreamEventType.TEXT_DELTA:
+            if not isinstance(event.text, str):
+                raise ProviderInvalidResponse("stream text delta must be a string")
+            if event.text:
+                text_parts.append(event.text)
+                _emit(
+                    on_event,
+                    RunEvent(
+                        type=EventType.ASSISTANT_DELTA,
+                        turn=turn,
+                        text=event.text,
+                    ),
+                )
+        elif event.type in (
+            StreamEventType.TOOL_CALL_START,
+            StreamEventType.TOOL_CALL_DELTA,
+        ):
+            if event.tool_index is None:
+                raise ProviderInvalidResponse(
+                    "streamed tool event is missing a tool index"
+                )
+            accumulator = accumulators.setdefault(
+                event.tool_index,
+                {"id": "", "name": "", "arguments": ""},
+            )
+            if event.tool_id:
+                accumulator["id"] = event.tool_id
+            if event.tool_name:
+                accumulator["name"] = event.tool_name
+            if event.arguments_delta:
+                accumulator["arguments"] += event.arguments_delta
+        elif event.type is StreamEventType.FINISH:
+            finish_reason = event.finish_reason
+            usage = event.usage
+        elif event.type is StreamEventType.ERROR:
+            raise ProviderStreamError(event.error or "provider stream failed")
+        else:
+            raise ProviderInvalidResponse(
+                f"unknown provider stream event {event.type!r}"
+            )
+
+    if not finish_reason:
+        raise ProviderInvalidResponse(
+            "provider stream returned no finish_reason"
+        )
+    tool_calls = [
+        _streamed_tool_call(index, accumulators[index])
+        for index in sorted(accumulators)
+    ]
+    return ProviderResponse(
+        text="".join(text_parts),
+        tool_calls=tool_calls,
+        finish_reason=finish_reason,
+        usage=usage or TokenUsage(0, 0),
+    )
+
+
 def run_loop(
     provider: Provider,
     model: str,
@@ -380,6 +511,7 @@ def run_loop(
         Callable[[list[dict[str, Any]]], list[dict[str, Any]] | None] | None
     ) = None,
     should_cancel: Callable[[], bool] | None = None,
+    stream: bool = False,
 ) -> RunResult:
     """Run the bounded agent loop until completion or an explicit stop.
 
@@ -404,6 +536,8 @@ def run_loop(
             returned list replaces the transcript in place.
         should_cancel: Optional cancellation probe checked between turns and
             between tool calls.
+        stream: Use ``provider.stream`` when available. If the provider has no
+            streaming method, this falls back to ``complete``.
 
     Returns:
         A :class:`RunResult` whose status distinguishes completion from every
@@ -462,7 +596,18 @@ def run_loop(
                 messages[:] = replacement
 
         try:
-            response = provider.complete(model, system, messages, specs)
+            if stream:
+                response = _consume_stream(
+                    provider,
+                    model,
+                    system,
+                    messages,
+                    specs,
+                    state.turns + 1,
+                    on_event,
+                )
+            else:
+                response = provider.complete(model, system, messages, specs)
         except ProviderInvalidResponse as exc:
             return _finish(
                 state, RunStatus.INVALID_RESPONSE, str(exc), on_event

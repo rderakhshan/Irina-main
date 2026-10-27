@@ -16,7 +16,8 @@ Design constraints:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from enum import Enum
+from typing import Any, Iterator, Protocol
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,61 @@ class ProviderResponse:
     usage: TokenUsage
 
 
+class StreamEventType(str, Enum):
+    """Provider-neutral streaming event kinds."""
+
+    TEXT_DELTA = "text_delta"
+    TOOL_CALL_START = "tool_call_start"
+    TOOL_CALL_DELTA = "tool_call_delta"
+    FINISH = "finish"
+    ERROR = "stream_error"
+
+
+@dataclass(frozen=True)
+class ProviderStreamEvent:
+    """One normalised streaming event from a provider.
+
+    Providers may split text, tool names, IDs, and JSON arguments across any
+    number of events. Consumers must accumulate by ``tool_index`` and must not
+    execute a tool until a final :class:`ProviderResponse` has been assembled.
+
+    Attributes:
+        type: Event kind.
+        text: Text delta for ``TEXT_DELTA``.
+        tool_index: Stable index for a tool call within one response.
+        tool_id: Provider-assigned call ID, when known.
+        tool_name: Function name, when known.
+        arguments_delta: Partial JSON argument text for a tool call.
+        finish_reason: Provider finish reason for ``FINISH``.
+        usage: Provider-reported usage for ``FINISH``, or ``None`` when absent.
+        error: Credential-free error description for ``ERROR``.
+    """
+
+    type: StreamEventType
+    text: str = ""
+    tool_index: int | None = None
+    tool_id: str = ""
+    tool_name: str = ""
+    arguments_delta: str = ""
+    finish_reason: str = ""
+    usage: TokenUsage | None = None
+    error: str = ""
+
+
+class StreamingProvider(Protocol):
+    """Optional streaming extension for a provider."""
+
+    def stream(
+        self,
+        model: str,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> Iterator[ProviderStreamEvent]:
+        """Yield provider-neutral stream events in wire order."""
+        ...
+
+
 class ProviderError(Exception):
     """Base class for classified provider failures."""
 
@@ -130,6 +186,10 @@ class ProviderInvalidResponse(ProviderError):
     Examples include missing choices, missing tool-call identifiers, missing
     usage data, and unknown finish reasons.
     """
+
+
+class ProviderStreamError(ProviderError):
+    """A streaming connection failed or ended before a valid finish."""
 
 
 class Provider(Protocol):

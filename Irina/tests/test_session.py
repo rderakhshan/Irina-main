@@ -12,7 +12,7 @@ from src.back.harness.context_management.context import TaskState
 from src.back.harness.loop.runner import EventType, RunEvent
 from src.back.harness.loop.state import RunResult, RunStatus
 from src.back.harness.providers.base import TokenUsage, ToolCall
-from src.back.harness.session import (
+from src.back.harness.orchestration.session import (
     SessionError,
     SessionLocked,
     SessionRecorder,

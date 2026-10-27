@@ -109,8 +109,6 @@ scripted provider makes the delegation sequence deterministic; the files, test
 run, policy, session, and sandbox are real.
 
 ```powershell
-python main.py
-# or
 python demos/stage3_subagents.py
 ```
 
@@ -135,6 +133,87 @@ without replaying the write.
 
 This Stage 3 demo is deterministic and does not need an API key. The live
 DeepSeek model variant of the Stage 3 acceptance task was not run.
+
+## Stage 4: CLI, fleet, and product builds
+
+`stage4_projects.py` runs `artisan-coffee`, `taskman`, and `viper` through the
+parallel `run_fleet` path. Each job gets its own Harness, session, and OpenShell
+sandbox. The script seeds `skills/design-engineering/SKILL.md` into the web
+sandboxes, runs a build phase and a review phase, verifies artifacts, downloads
+them to the host project directories, and records checks and hashes in
+`stage4_results.json`.
+
+```powershell
+python demos/stage4_projects.py --workers 3
+python demos/stage4_projects.py --only taskman --workers 1
+```
+
+The demo uses `Policy("yolo")` explicitly so the build can write files and run
+commands without interactive prompts; OpenShell remains the execution boundary.
+Headless `safe` is the CLI default and never auto-approves.
+
+### Stage 4 live results
+
+These runs used real DeepSeek + OpenShell and are recorded in
+[`stage4_results.json`](../stage4_results.json). Browser interaction was not
+automated, so the web checks are static.
+
+| Project | Mechanical result | Turns | Evidence | Caveat |
+| --- | --- | --- | --- | --- |
+| `taskman` | PASS | 27 | 19 tests pass; `--help` works; JSON/atomic persistence | Build and review completed. |
+| `artisan-coffee` | PASS | 27 | 9 sections, 2,171 words, 16 inline SVGs, 8 listeners | Static only; review ended at `token_budget`. |
+| `viper` | PASS | 25 | Canvas, rAF, localStorage, 9 listeners | Static only; review ended at `token_budget`. |
+
+The web runs met their mechanical bars but did not complete the review phase
+inside the live token budget. Do not describe them as fully reviewed or
+browser-tested. `taskman` is the complete two-phase pass.
+
+The demo supports `--max-turns`, `--max-seconds`, `--max-tokens`, and
+`--max-total-tokens`. A failed mechanical check triggers one focused repair run
+in the same session; the results still show the true status rather than turning
+an incomplete run into a success.
+
+## Stage 5: streaming terminal UI
+
+`stage5_streaming.py` verifies the streaming provider, renderer, and fleet
+presentation. The free UI tour uses synthetic events so it can run without a
+key:
+
+```powershell
+python demos/stage5_streaming.py --plain
+```
+
+It shows Markdown, success/failure/blocked tool states, context compaction,
+controlled cancellation, and a serialized three-job fleet display. The
+cancellation is a controlled fake-provider test, not a live model interruption.
+
+The real streaming checks are:
+
+```powershell
+python demos/stage5_streaming.py --text
+python demos/stage5_streaming.py --live --plain
+```
+
+`--text` measures provider deltas only (no tools); `--live` runs the full
+OpenShell tool task.
+
+Actual observed results:
+
+- Real DeepSeek text-only stream: 92 deltas; first delta at 11.392s, last at
+  12.066s, total 12.067s; finish `stop`; 110 input / 961 output tokens. Provider
+  latency varies; the observed streaming window was 0.67s.
+- Real DeepSeek + OpenShell CLI task: `list_files`, `write_file`, and `bash`
+  completed in 4 turns / 3 tools / 10.8s; `stream_probe.txt` contained
+  `stream-ok`; the session was preserved.
+- A safe `write_file` displayed `! approval required ...`; a `false` command
+  displayed `x exit status: 1`.
+- `--plain` output contains no ANSI and no Unicode symbols.
+- The controlled cancellation stored session status `interrupted` and executed
+  no tool.
+
+The live text-only measurement above used `max_tokens=2048`; it is not a claim
+about network latency in every environment. Browser interaction is not part of
+this demo.
 
 ## Setup
 

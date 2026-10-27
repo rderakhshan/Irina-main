@@ -1,20 +1,29 @@
-# Harness
+﻿# Harness
 
 The harness runs one conversation from start to finish. It asks the model for a
 reply, runs any tools the model asks for, and stops for a clear reason.
 
 The loop is deliberately small. Day 1 added one model adapter and a dice demo;
 Day 2 added six workspace tools and an OpenShell sandbox. Stage 2 added context
-compaction, durable memory, and skills. Stage 3 adds durable sessions, truthful
-crash repair, sequential sub-agents, and the central `Harness`.
+compaction, durable memory, and skills. Stage 3 added durable sessions, truthful
+crash repair, sequential sub-agents, and the central `Harness`. Stage 4 adds the
+interactive/headless CLI, parallel fleet execution, and artifact download.
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
-| `harness.py` | Central composition of provider, loop, tools, policy, context, sessions, and OpenShell. |
-| `session.py` | Append-only JSONL sessions, recorder, load/repair, latest-session lookup. |
-| `subagent.py` | `spawn_agent`, delegation budget, sequential child execution. |
+| `orchestration/harness.py` | Central composition of provider, loop, tools, policy, context, sessions, and OpenShell. |
+| `orchestration/session.py` | Append-only JSONL sessions, recorder, load/repair, latest-session lookup. |
+| `orchestration/subagent.py` | `spawn_agent`, delegation budget, sequential child execution. |
+| `orchestration/cli.py` | Interactive/headless front door, approvals, exit codes, resume. |
+| `orchestration/fleet.py` | Parallel isolated jobs, validation, ordering, optional review/repair. |
+| `__main__.py` | `python -m src.back.harness` entry point. |
+| `utils/theme.py` | Semantic terminal colors, symbols, and capability detection. |
+| `utils/formatting.py` | Redaction, safe display, previews, durations, and token formatting. |
+| `utils/markdown.py` | Incremental Markdown presentation. |
+| `utils/renderer.py` | Streaming event renderer and progress indicator. |
+| `utils/fleet.py` | Serialized, job-prefixed concurrent fleet output. |
 | `loop/runner.py` | Runs turns, handles tool calls, emits events. |
 | `loop/state.py` | Defines run statuses, the result object, and counters. |
 | `loop/termination.py` | Sets limits for turns, tools, time, tokens, repeats, and failures. |
@@ -131,10 +140,154 @@ compaction and task state, and calls the existing `run_loop`. It defaults to
 ### Harness API
 
 `Harness(workdir, model, policy, ..., provider, workspace_backend, state_dir)`
-exposes `run(task)`, `resume(path=None)`, `close()`, `tools`, `workspace`,
-`system_prompt`, `session_path`, and `session_status`. The deterministic Stage 3
-demo uses a scripted provider; the real OpenShell crash integration test uses a
-forced process exit and a fresh Harness to resume.
+exposes `run(task)`, `continue_task(task)`, `resume(path=None)`, `close()`,
+`tools`, `workspace`, `sandbox`, `system_prompt`, `session_path`, and
+`session_status`. The deterministic Stage 3 demo uses a scripted provider; the
+real OpenShell crash integration test uses a forced process exit and a fresh
+Harness to resume.
+
+## Stage 4: CLI, fleet, and artifacts
+
+### CLI
+
+`orchestration/cli.py` is a thin front door over `Harness`:
+
+```powershell
+python main.py                         # interactive
+python main.py -p "Fix the failing test" --mode safe
+python main.py -p "Build the release" --mode yolo --workdir .
+python main.py --resume
+python main.py --resume <session.jsonl>
+python -m src.back.harness --help
+```
+
+- `safe` is the default. Interactive `safe` asks for explicit approval; headless
+  `safe` refuses approval-required operations instead of auto-approving them.
+- `--mode yolo` skips application approvals; OpenShell and dangerous-command
+  checks remain.
+- Headless exit `0` means `RunStatus.COMPLETED`. Any other status returns
+  nonzero, and the session is preserved.
+- Ctrl-C during a run returns `130`, preserves the session, and leaves the owned
+  sandbox alive for `--resume`. A normal exit closes/deletes the owned sandbox.
+- Assistant text, tool arguments, results, status reasons, and session labels are
+  redacted before display or persistence.
+
+### Fleet
+
+`orchestration/fleet.py` runs independent jobs concurrently:
+
+```python
+from src.back.harness import run_fleet
+
+results = run_fleet(jobs, make_harness, max_workers=3)
+```
+
+- Jobs require `name`, `workdir`, and `task`; optional `review_task` and
+  `on_complete` are supported.
+- Names must be unique. Duplicate or overlapping workspaces are rejected before
+  any job starts.
+- Each job gets its own `Harness`, session, transcript, and OpenShell sandbox.
+  One job's exception is reported without stopping the others.
+- Results preserve input order and include `ok`, `report`, status, turns, tool
+  calls, session, usage, and phase metadata.
+- A completed build may run a review in the same session via `continue_task`.
+  `on_complete` receives the live Harness, can verify or download artifacts, and
+  can mark the job failed by returning `{"ok": False}`.
+- The demo uses one focused repair pass when mechanical verification fails. It
+  never reuses a workspace across jobs.
+
+Each job's `Harness.close()` deletes its owned sandbox. `Harness.sandbox` exposes
+the live adapter to the completion callback. `OpenShellSandbox.download(path,
+destination)` copies a file or directory only from inside the approved workspace,
+so artifacts can be saved before cleanup.
+
+### Stage 4 live results
+
+The three product builds used real DeepSeek + OpenShell. Results and hashes are
+in [`stage4_results.json`](../../../stage4_results.json).
+
+| Project | Mechanical result | Status | Caveat |
+| --- | --- | --- | --- |
+| `taskman` | PASS | `completed` | Build + review completed; 19 tests pass. |
+| `artisan-coffee` | PASS | `token_budget` | 9 sections, 2,171 words, 16 SVGs; review incomplete. |
+| `viper` | PASS | `token_budget` | Canvas, rAF, localStorage, 9 listeners; review incomplete. |
+
+Web verification is static; browser interaction was not automated. The web
+projects met their mechanical bars but did not finish the review phase within
+the live token budget, so the Stage 4 process is not fully complete for them.
+
+## Stage 5: streaming and terminal UI
+
+### Provider stream
+
+`ProviderStreamEvent` is a neutral event type for text deltas, tool-call
+identity/argument deltas, finish metadata, usage, and explicit stream errors.
+`DeepSeekProvider.stream()` parses server-sent events from the real
+`/chat/completions` streaming endpoint. It uses `stream_options` for usage when
+the API supplies it, preserves chunk order, preserves exact tool IDs, supports
+multiple tool calls, and never executes a tool.
+
+`complete()` remains unchanged. A provider without `stream()` continues to use
+the completion path.
+
+### Loop integration
+
+`run_loop(..., stream=True)` uses `provider.stream()` when available and falls
+back to `complete()`. It emits `ASSISTANT_DELTA` immediately, then assembles the
+complete assistant message and validated tool calls, then emits the existing
+`ASSISTANT` event. Tools still pass through the existing policy and OpenShell
+path. Deltas are UI events only; they are not written as separate conversation
+messages or session records.
+
+Cancellation or a truncated stream closes the generator before any partial tool
+call can execute. `Harness` records an interrupted stream as `interrupted`, not
+`completed`.
+
+### Terminal UI
+
+`utils/` owns presentation only:
+
+- `theme.py`: semantic colors, Unicode/ASCII symbols, TTY/capability detection.
+- `formatting.py`: redaction, terminal-control stripping, path/args/clip/duration/
+  token formatting, result previews, and the bounded cross-chunk redactor.
+- `markdown.py`: incremental headings, lists, code fences, tables, and inline
+  code without full-document buffering.
+- `renderer.py`: streaming text, tool start/success/failure/blocked, compaction,
+  cancellation, errors, progress indicators, and completion summary.
+- `fleet.py`: thread-safe, job-prefixed fleet output.
+
+CLI flags:
+
+```text
+--stream / --no-stream
+--color / --no-color
+--plain
+```
+
+Streaming is on by default. Redirected output disables spinners and ANSI by
+default; `--plain` also forces ASCII fallbacks. The interactive prompt is `>`
+(plain/ASCII mode).
+
+Security limits: known credential markers are held across chunks and redacted;
+this is bounded protection, not a guarantee for arbitrary unknown secrets.
+ANSI, C0/C1 controls, bidi controls, and terminal escape sequences are stripped
+from display text. Original text remains in the durable transcript.
+
+### Stage 5 verification
+
+```powershell
+python demos/stage5_streaming.py --text
+python demos/stage5_streaming.py --live --plain
+```
+
+- Real DeepSeek text-only stream: 92 deltas, first at 11.392s, last at 12.066s,
+  12.067s total, finish `stop`, 110 input / 961 output tokens. Provider latency
+  varies; the 0.67s between first and last delta is the observed streaming window.
+- Real DeepSeek + OpenShell CLI task: 4 turns, 3 tools, 10.8s, session preserved.
+- Safe write: visibly blocked; `false`: visibly failed; `--plain`: no ANSI.
+- Controlled cancellation: session status `interrupted`, zero tools executed.
+- Fleet display: serialized prefixed output in the synthetic demo.
+- Full suite: 259 tests, OK (2 skipped).
 
 ## Limits
 
@@ -149,16 +302,31 @@ complete.
 Stage 3 limits: child runs are sequential, child sessions are not persisted, and
 resume requires the original OpenShell sandbox/workspace. The deterministic
 sub-agent demo uses a scripted provider; the live DeepSeek model variant of the
-Stage 3 acceptance task was not run. No parallel scheduling, queue, database, or
-production CLI is included.
+Stage 3 acceptance task was not run.
+
+Stage 4 limits: fleet jobs are independent parallel jobs, not child agents
+inside one conversation. There is no queue, distributed scheduler, database, or
+multi-tenant isolation beyond OpenShell. Web browser interaction is not
+automated. `artisan-coffee` and `viper` ended at `token_budget` before a completed
+review, although their static checks passed.
+
+Stage 5 limits: streaming is synchronous and single-stream per Harness; there is
+no provider-side cancellation token beyond closing the connection. Markdown is
+streamed with line/structural buffering, not a full terminal Markdown renderer.
+The cross-chunk redactor is bounded and documented; it does not claim absolute
+secret detection. Streaming usage is zero when the provider omits usage rather
+than being invented.
 
 ## More detail
 
-- [Loop](loop/README.md) — turn order, completion rules, events.
-- [Providers](providers/README.md) — model adapter and retries.
-- [Tools and guardrails](tools_and_guardrails/README.md) — six tools, policy, OpenShell.
-- [Context, memory, skills](context_management/README.md) — compaction, task state, `IRINA.md`, `SKILL.md`.
-- [Stage 3 sub-agent demo](../../../demos/stage3_subagents.py) — deterministic sequential delegation.
-- [Demos](../../../demos/README.md) — dice, OpenShell, Stage 2, Stage 3.
-- [Tests](../../../tests/README.md) — unit and OpenShell integration coverage.
-- [Project overview](../../../README.md) — the short version.
+- [Loop](loop/README.md) â€” turn order, completion rules, events.
+- [Providers](providers/README.md) â€” model adapter and retries.
+- [Tools and guardrails](tools_and_guardrails/README.md) â€” six tools, policy, OpenShell.
+- [Context, memory, skills](context_management/README.md) â€” compaction, task state, `IRINA.md`, `SKILL.md`.
+- [Stage 3 sub-agent demo](../../../demos/stage3_subagents.py) â€” deterministic sequential delegation.
+- [Stage 4 fleet demo](../../../demos/stage4_projects.py) - parallel product builds and verification.
+- [Stage 4 results](../../../stage4_results.json) - checks, hashes, and sessions.
+- [Stage 5 streaming demo](../../../demos/stage5_streaming.py) - real and synthetic terminal UI checks.
+- [Demos](../../../demos/README.md) - dice, OpenShell, Stage 2, Stage 3, Stage 4, Stage 5.
+- [Tests](../../../tests/README.md) â€” unit and OpenShell integration coverage.
+- [Project overview](../../../README.md) â€” the short version.

@@ -8,9 +8,10 @@ gateway and create a real sandbox; they skip when OpenShell is unavailable.
 python -m unittest discover -s tests -v
 ```
 
-Current run: **188 tests, OK** (2 skips for Windows symlink creation). Nine of
+Current run: **259 tests, OK** (2 skips for Windows symlink creation). Nine of
 those tests use real OpenShell sandboxes: the Stage 1 integration class and the
-Stage 3 crash/resume test.
+Stage 3 crash/resume test. Stage 4 live product runs and Stage 5 live streaming
+checks are separate; see the demo README.
 
 ## What is covered
 
@@ -131,11 +132,60 @@ Stage 3 crash/resume test.
 - plain runs and tool runs with session records
 - interrupted-session resume and unknown-outcome inspection
 - completed-session refusal and workspace isolation
+- `continue_task` appending to the same completed session
 - sub-agent delegation, fresh conversations, and one parent session
 - child policy inheritance and blocked child writes
 - child turn/time/total-task limits
 - compaction on resume with durable history preserved
 - unavailable sandbox errors instead of host fallback
+
+`test_cli.py`:
+
+- parser defaults, help, invalid modes, and resume forms
+- interactive safe approvals and headless safe refusal behavior
+- completed/incomplete/interrupted/failed exit codes
+- Ctrl-C session preservation without sandbox cleanup
+- interactive prompt loop and `continue_task` follow-ups
+- event/output redaction
+- startup errors and workspace preparation
+
+`test_fleet.py`:
+
+- empty fleets and ordered results
+- parallel execution with a barrier
+- review in the same Harness/session
+- failure isolation and per-job cleanup
+- verification callbacks that fail a job
+- duplicate names and duplicate/overlapping workspace rejection
+- invalid worker counts and job shapes
+
+`test_sandbox_download.py`:
+
+- downloading from inside the approved workspace
+- parent-directory creation
+- workspace escape rejection
+- started-sandbox and CLI-failure handling
+
+`test_streaming.py`:
+
+- DeepSeek SSE text deltas, finish reasons, and usage
+- multiple/partial tool-call arguments with exact IDs
+- complete-vs-stream semantic equivalence
+- truncated streams and connection failures
+- loop delta events, no partial tool execution, and cancellation
+- streaming deltas are not persisted as session messages
+- interrupted stream session status
+- renderer duplicate suppression and tool success/failure/blocked/cancelled
+- Markdown headings, lists, fences, inline code, partial, and malformed input
+- plain/ASCII output and cross-chunk secret/control-sequence protection
+- thread-safe fleet rendering
+
+`test_stage4_projects.py`:
+
+- artisan-coffee section/word/SVG/interaction checks
+- viper canvas/rAF/localStorage/game-state checks
+- taskman files, test count, test result, and help result
+- project configuration and default CLI demo settings
 
 `test_stage3_integration.py`:
 
@@ -163,6 +213,30 @@ Stage 3 checks:
 python -m unittest tests.test_session tests.test_subagent tests.test_harness -v
 python -m unittest tests.test_stage3_integration -v
 ```
+
+Stage 4 checks:
+
+```powershell
+python -m unittest tests.test_cli tests.test_fleet tests.test_sandbox_download tests.test_stage4_projects -v
+```
+
+Stage 5 checks:
+
+```powershell
+python -m unittest tests.test_streaming -v
+python -m unittest tests.test_loop tests.test_harness tests.test_cli -v
+```
+
+The Stage 4 product proof is a live run, not an offline test:
+
+```powershell
+python demos/stage4_projects.py --only taskman --workers 1
+```
+
+`taskman` completed; the two web projects passed static checks but ended at
+`token_budget` before a completed review. Browser interaction is not automated.
+See [demos/README.md](../demos/README.md) and
+[stage4_results.json](../stage4_results.json) for the exact results.
 
 See the [tools and guardrails README](../src/back/harness/tools_and_guardrails/README.md)
 for the sandbox policy, the

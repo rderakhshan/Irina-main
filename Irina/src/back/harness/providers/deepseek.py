@@ -21,17 +21,21 @@ import json
 import os
 import random
 import time
+import http.client
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, Iterator
 
 from .base import (
     ProviderHTTPError,
     ProviderInvalidResponse,
     ProviderResponse,
     ProviderRetryExhausted,
+    ProviderStreamError,
+    ProviderStreamEvent,
+    StreamEventType,
     TokenUsage,
     ToolCall,
 )
@@ -405,6 +409,52 @@ def _parse_tool_call(raw: Any, index: int) -> ToolCall:
     )
 
 
+def _parse_usage(value: Any) -> TokenUsage | None:
+    """Parse usage without inventing missing counters."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ProviderInvalidResponse("provider stream usage must be an object")
+    prompt_tokens = value.get("prompt_tokens")
+    completion_tokens = value.get("completion_tokens")
+    if prompt_tokens is None and completion_tokens is None:
+        return None
+    for label, number in (
+        ("prompt_tokens", prompt_tokens),
+        ("completion_tokens", completion_tokens),
+    ):
+        if isinstance(number, bool) or not isinstance(number, int) or number < 0:
+            raise ProviderInvalidResponse(
+                f"provider stream usage {label} must be a non-negative integer"
+            )
+    return TokenUsage(
+        input_tokens=prompt_tokens or 0,
+        output_tokens=completion_tokens or 0,
+    )
+
+
+def _iter_sse(response: Any) -> Iterator[str]:
+    """Yield SSE ``data`` payloads, including multi-line data fields."""
+    data: list[str] = []
+    for raw in response:
+        if isinstance(raw, bytes):
+            text = raw.decode("utf-8", "replace")
+        else:
+            text = str(raw)
+        for line in text.splitlines():
+            if not line:
+                if data:
+                    yield "\n".join(data)
+                    data = []
+                continue
+            if line.startswith(":"):
+                continue
+            if line.startswith("data:"):
+                data.append(line[5:].lstrip(" "))
+    if data:
+        yield "\n".join(data)
+
+
 def _parse_response(payload: dict[str, Any]) -> ProviderResponse:
     """Parse a DeepSeek chat completion payload into a provider response.
 
@@ -554,3 +604,231 @@ class DeepSeekProvider:
             timeout=self.timeout,
         )
         return _parse_response(payload)
+
+    def _open_stream(self, body: dict[str, Any]) -> Any:
+        """Open a streaming HTTP response, retrying only before events flow."""
+        encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "Authorization": f"Bearer {self._api_key}",
+        }
+        retry_budget = max(0, int(self.retries))
+        attempts = retry_budget + 1
+        last_status: int | None = None
+        last_description = "no response"
+        for attempt in range(attempts):
+            request = urllib.request.Request(
+                f"{self.base_url}/chat/completions",
+                data=encoded,
+                headers=headers,
+                method="POST",
+            )
+            try:
+                return urlopen(request, timeout=self.timeout)
+            except urllib.error.HTTPError as exc:
+                status = int(exc.code)
+                description = _http_error_description(exc)
+                last_status = status
+                last_description = description
+                if status in RETRYABLE_STATUS_CODES:
+                    if attempt < retry_budget:
+                        retry_after = _header_value(exc.headers, "Retry-After")
+                        time.sleep(_retry_delay(attempt, retry_after))
+                        continue
+                    raise ProviderRetryExhausted(
+                        status, description, attempts=attempts
+                    ) from None
+                raise ProviderHTTPError(status, description) from None
+            except (urllib.error.URLError, OSError) as exc:
+                reason = getattr(exc, "reason", exc)
+                description = _truncate(f"{type(reason).__name__}: {reason}")
+                last_status = None
+                last_description = description
+                if attempt < retry_budget:
+                    time.sleep(_retry_delay(attempt, None))
+                    continue
+                raise ProviderRetryExhausted(
+                    None, description, attempts=attempts
+                ) from None
+        raise ProviderRetryExhausted(
+            last_status, last_description, attempts=attempts
+        )
+
+    def stream(
+        self,
+        model: str,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> Iterator[ProviderStreamEvent]:
+        """Yield genuine DeepSeek stream events as they arrive.
+
+        The stream is parsed from the server-sent-event response. Tool-call
+        arguments are emitted as deltas; this method never executes a tool.
+        """
+        model_name = (model or self.default_model).strip() or self.default_model
+        wire_messages: list[dict[str, Any]] = []
+        if system:
+            if not isinstance(system, str):
+                raise TypeError("system prompt must be a string")
+            wire_messages.append({"role": "system", "content": system})
+        wire_messages.extend(_to_wire(messages))
+
+        body: dict[str, Any] = {
+            "model": model_name,
+            "messages": wire_messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        declarations = _tools_to_wire(tools)
+        if declarations:
+            body["tools"] = declarations
+            body["tool_choice"] = "auto"
+
+        response = self._open_stream(body)
+        finish_reason = ""
+        usage: TokenUsage | None = None
+        try:
+            with response:
+                for data in _iter_sse(response):
+                    if not data:
+                        continue
+                    if data.strip() == "[DONE]":
+                        break
+                    try:
+                        payload = json.loads(data)
+                    except (json.JSONDecodeError, ValueError) as exc:
+                        raise ProviderInvalidResponse(
+                            "provider stream returned invalid JSON: "
+                            f"{_truncate(str(exc))}"
+                        ) from None
+                    if not isinstance(payload, dict):
+                        raise ProviderInvalidResponse(
+                            "provider stream payload must be an object"
+                        )
+                    error = payload.get("error")
+                    if isinstance(error, dict):
+                        message = error.get("message") or "stream error"
+                        raise ProviderStreamError(_truncate(str(message)))
+
+                    parsed_usage = _parse_usage(payload.get("usage"))
+                    if parsed_usage is not None:
+                        usage = parsed_usage
+
+                    choices = payload.get("choices")
+                    if choices is None:
+                        continue
+                    if not isinstance(choices, list):
+                        raise ProviderInvalidResponse(
+                            "provider stream choices must be a list"
+                        )
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    if not isinstance(choice, dict):
+                        raise ProviderInvalidResponse(
+                            "provider stream choice must be an object"
+                        )
+
+                    delta = choice.get("delta")
+                    if isinstance(delta, dict):
+                        content = delta.get("content")
+                        if content is not None:
+                            if not isinstance(content, str):
+                                raise ProviderInvalidResponse(
+                                    "provider stream content must be a string"
+                                )
+                            if content:
+                                yield ProviderStreamEvent(
+                                    type=StreamEventType.TEXT_DELTA,
+                                    text=content,
+                                )
+
+                        raw_calls = delta.get("tool_calls")
+                        if raw_calls is not None:
+                            if not isinstance(raw_calls, list):
+                                raise ProviderInvalidResponse(
+                                    "provider stream tool_calls must be a list"
+                                )
+                            for position, raw_call in enumerate(raw_calls):
+                                if not isinstance(raw_call, dict):
+                                    raise ProviderInvalidResponse(
+                                        "provider stream tool call must be an object"
+                                    )
+                                index = raw_call.get("index", position)
+                                if (
+                                    isinstance(index, bool)
+                                    or not isinstance(index, int)
+                                    or index < 0
+                                ):
+                                    raise ProviderInvalidResponse(
+                                        "provider stream tool index must be a "
+                                        "non-negative integer"
+                                    )
+                                call_id = raw_call.get("id")
+                                if call_id is not None and not isinstance(call_id, str):
+                                    raise ProviderInvalidResponse(
+                                        "provider stream tool id must be a string"
+                                    )
+                                function = raw_call.get("function")
+                                name = ""
+                                arguments = ""
+                                if function is not None:
+                                    if not isinstance(function, dict):
+                                        raise ProviderInvalidResponse(
+                                            "provider stream function must be an object"
+                                        )
+                                    raw_name = function.get("name")
+                                    if raw_name is not None:
+                                        if not isinstance(raw_name, str):
+                                            raise ProviderInvalidResponse(
+                                                "provider stream tool name must be a string"
+                                            )
+                                        name = raw_name
+                                    raw_arguments = function.get("arguments")
+                                    if raw_arguments is not None:
+                                        if not isinstance(raw_arguments, str):
+                                            raise ProviderInvalidResponse(
+                                                "provider stream tool arguments must be a string"
+                                            )
+                                        arguments = raw_arguments
+                                if call_id or name:
+                                    yield ProviderStreamEvent(
+                                        type=StreamEventType.TOOL_CALL_START,
+                                        tool_index=index,
+                                        tool_id=call_id or "",
+                                        tool_name=name,
+                                        arguments_delta=arguments,
+                                    )
+                                elif arguments:
+                                    yield ProviderStreamEvent(
+                                        type=StreamEventType.TOOL_CALL_DELTA,
+                                        tool_index=index,
+                                        arguments_delta=arguments,
+                                    )
+
+                    raw_finish = choice.get("finish_reason")
+                    if raw_finish is not None:
+                        if not isinstance(raw_finish, str) or not raw_finish:
+                            raise ProviderInvalidResponse(
+                                "provider stream finish_reason must be a string"
+                            )
+                        finish_reason = raw_finish
+        except (urllib.error.URLError, OSError, http.client.IncompleteRead) as exc:
+            raise ProviderStreamError(
+                "stream connection failed: "
+                f"{_truncate(f'{type(exc).__name__}: {exc}')}"
+            ) from None
+
+        if not finish_reason:
+            raise ProviderInvalidResponse(
+                "provider stream ended without a finish_reason"
+            )
+        yield ProviderStreamEvent(
+            type=StreamEventType.FINISH,
+            finish_reason=finish_reason,
+            usage=usage,
+        )

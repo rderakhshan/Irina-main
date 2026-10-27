@@ -17,8 +17,46 @@ import re
 from typing import Any, Callable
 
 READ_TOOLS = frozenset({"read_file", "list_files", "grep"})
+READ_ONLY_TOOLS = READ_TOOLS | {"use_skill"}
 COMMAND_TOOLS = frozenset({"bash", "shell", "powershell", "pwsh"})
 MODES = frozenset({"read-only", "safe", "yolo"})
+
+SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
+    re.compile(
+        r"(?i)\b[A-Za-z0-9_]*(?:api[_-]?key|access[_-]?key|secret[_-]?key|"
+        r"token|password|passwd|secret|credential)\b\s*[:=]\s*[^\s,;]+"
+    ),
+    re.compile(
+        r"(?i)\b(?:password|passwd|secret|token)\s+(?:is|was)\s+[^\s,;]+"
+    ),
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{16,}\b"),
+    re.compile(
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?"
+        r"-----END [A-Z ]*PRIVATE KEY-----",
+        re.DOTALL,
+    ),
+)
+
+
+def contains_secret(text: str) -> bool:
+    """Return whether text contains a likely credential."""
+    return any(pattern.search(text) for pattern in SECRET_PATTERNS)
+
+
+def redact_secrets(text: str) -> str:
+    """Replace likely credentials with ``[REDACTED]``.
+
+    Args:
+        text: Text that may contain credentials.
+
+    Returns:
+        The text with matching credential spans replaced.
+    """
+    result = text
+    for pattern in SECRET_PATTERNS:
+        result = pattern.sub("[REDACTED]", result)
+    return result
 
 DENY_PATTERNS: tuple[str, ...] = (
     # rm with both recursive and force flags, targeting root or home. Kept
@@ -129,7 +167,7 @@ class Policy:
                         f"matched {matched}"
                     )
 
-        if name in READ_TOOLS:
+        if name in READ_ONLY_TOOLS:
             return None
         if self.mode == "yolo":
             return None
@@ -159,5 +197,6 @@ class Policy:
             "write_file": "writes a file in the workspace",
             "edit_file": "edits a file in the workspace",
             "bash": "runs a command inside the sandbox",
+            "remember": "writes durable project memory in the workspace",
         }
         return reasons.get(name, "requests a non-read-only operation")

@@ -15,11 +15,46 @@ from __future__ import annotations
 import os
 import unittest
 
+from src.back.harness.loop.runner import run_loop
+from src.back.harness.loop.state import RunStatus
+from src.back.harness.loop.termination import TerminationPolicy
+from src.back.harness.providers.base import (
+    ProviderResponse,
+    TokenUsage,
+    ToolCall,
+)
 from src.back.harness.tools_and_guardrails import (
     OpenShellSandbox,
+    Policy,
     SandboxUnavailable,
     core_tools,
 )
+
+
+class ScriptedAgent:
+    """Provider that requests tools once, then gives a final answer."""
+
+    def __init__(self, tool_calls: list[ToolCall], final_text: str) -> None:
+        self.tool_calls = tool_calls
+        self.final_text = final_text
+        self.calls = 0
+
+    def complete(self, model, system, messages, tools) -> ProviderResponse:
+        self.calls += 1
+        if self.calls == 1:
+            return ProviderResponse(
+                text="",
+                tool_calls=self.tool_calls,
+                finish_reason="tool_calls",
+                usage=TokenUsage(1, 1),
+            )
+        return ProviderResponse(
+            text=self.final_text,
+            tool_calls=[],
+            finish_reason="stop",
+            usage=TokenUsage(1, 1),
+        )
+
 
 
 class OpenShellIntegrationTests(unittest.TestCase):
@@ -156,6 +191,89 @@ class OpenShellIntegrationTests(unittest.TestCase):
 
         listing = self.sandbox.exec(["ls", "-a"], timeout=10)
         self.assertNotIn(".env", listing.stdout)
+
+    def test_destructive_command_reaches_the_agent_as_blocked(self) -> None:
+        tools = {
+            item.name: item
+            for item in core_tools(self.sandbox.workspace, self.sandbox)
+        }
+        executed: list[dict] = []
+        original = tools["bash"].run
+
+        def spy(**kwargs):
+            executed.append(kwargs)
+            return original(**kwargs)
+
+        tools["bash"].run = spy
+        provider = ScriptedAgent(
+            [
+                ToolCall(
+                    id="rm-call",
+                    name="bash",
+                    args={"command": "rm -rf ~"},
+                )
+            ],
+            "I cannot do that. The command was blocked by policy.",
+        )
+        messages = [{"role": "user", "text": "Delete my home directory."}]
+        result = run_loop(
+            provider=provider,
+            model="scripted",
+            system="test",
+            messages=messages,
+            tools=tools,
+            before_tool=Policy("yolo").check,
+            policy=TerminationPolicy(),
+        )
+
+        self.assertIs(result.status, RunStatus.COMPLETED)
+        observation = next(
+            message["text"]
+            for message in messages
+            if message.get("role") == "tool"
+            and message.get("tool_call_id") == "rm-call"
+        )
+        self.assertTrue(observation.startswith("BLOCKED:"))
+        self.assertIn("dangerous command", observation)
+        self.assertEqual(executed, [])
+
+    def test_workspace_escape_reaches_the_agent_as_a_tool_error(self) -> None:
+        tools = {
+            item.name: item
+            for item in core_tools(self.sandbox.workspace, self.sandbox)
+        }
+        provider = ScriptedAgent(
+            [
+                ToolCall(
+                    id="read-call",
+                    name="read_file",
+                    args={"path": "../../etc/passwd"},
+                )
+            ],
+            "I could not read that path because it escapes the workspace.",
+        )
+        messages = [{"role": "user", "text": "Read ../../etc/passwd."}]
+        result = run_loop(
+            provider=provider,
+            model="scripted",
+            system="test",
+            messages=messages,
+            tools=tools,
+            before_tool=Policy("yolo").check,
+            policy=TerminationPolicy(),
+        )
+
+        self.assertIs(result.status, RunStatus.COMPLETED)
+        observation = next(
+            message["text"]
+            for message in messages
+            if message.get("role") == "tool"
+            and message.get("tool_call_id") == "read-call"
+        )
+        self.assertIn("ERROR: PermissionError", observation)
+        self.assertIn("escapes the working directory", observation)
+        self.assertNotIn("root:", observation)
+        self.assertNotIn("root:", result.text)
 
     def test_h_windows_powershell_launch_uses_the_sandbox(self) -> None:
         if os.name != "nt":

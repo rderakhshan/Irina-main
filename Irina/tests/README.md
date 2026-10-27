@@ -62,6 +62,8 @@ python -m unittest discover -s tests -v
 - non-root process identity and setuid denial
 - no provider credentials in the sandbox
 - launch from Windows PowerShell through WSL
+- a scripted agent receiving `BLOCKED` for a destructive command
+- a scripted agent receiving a `PermissionError` observation for a path escape
 
 The integration class starts one sandbox and deletes it after the class. It does
 not print credentials.

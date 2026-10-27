@@ -2,8 +2,9 @@
 
 Irina is a Python project for building and evaluating AI agents. Day 1 built a
 small agent loop that talks to DeepSeek and returns a clear result for every run.
-Day 2 adds six workspace tools, an application permission policy, and execution
-inside an NVIDIA OpenShell sandbox.
+Day 2 added six workspace tools, an application permission policy, and execution
+inside an NVIDIA OpenShell sandbox. Stage 2 adds context compaction, durable
+project memory, and loadable skills.
 
 The harness uses only the Python standard library. It does not use an agent
 framework or a vendor SDK. The repo targets Python 3.13; the harness code uses
@@ -17,14 +18,20 @@ features available from Python 3.10.
 - `read-only`, `safe`, and `yolo` permission modes with dangerous-command checks.
 - OpenShell 0.1.5 execution with a non-root user, confined filesystem, denied
   outbound network, and no provider credentials in the sandbox.
+- Context compaction that preserves complete tool-call groups and emits a
+  `context_compacted` event.
+- Durable `IRINA.md` project memory across separate conversations.
+- `SKILL.md` discovery and a `use_skill` tool, with skills kept lower-trust.
+- Structured session task state updated from actual tool events.
 - Clear run results, so "stopped" is not confused with "finished".
 - Offline tests with a scripted model.
-- Live checks for the Day 1 tasks and the Day 2 OpenShell tasks.
+- Live checks for the Day 1, Day 2, and Stage 2 tasks.
 
 The Day 1 live check passed against DeepSeek for both tasks. The Day 2 acceptance
-demo passed Fibonacci, destructive-command, and workspace-escape checks. The full
-local suite is 100 tests; 8 of them use a real OpenShell sandbox and verify
-filesystem, network, process, and credential isolation.
+demo passed Fibonacci, destructive-command, and workspace-escape checks. The
+Stage 2 demo passed long-task compaction, cross-session memory, and runtime skill
+loading. The full local suite is 147 tests; 8 of them use a real OpenShell
+sandbox and verify filesystem, network, process, and credential isolation.
 
 ## Start here
 
@@ -34,7 +41,8 @@ filesystem, network, process, and credential isolation.
 | Loop | Turn order, stop conditions, completion, events | [src/back/harness/loop/README.md](src/back/harness/loop/README.md) |
 | Providers | DeepSeek settings, message mapping, retries | [src/back/harness/providers/README.md](src/back/harness/providers/README.md) |
 | Tools and guardrails | Six tools, permission policy, shell, OpenShell | [src/back/harness/tools_and_guardrails/README.md](src/back/harness/tools_and_guardrails/README.md) |
-| Demos | Dice, live check, OpenShell workspace demo | [demos/README.md](demos/README.md) |
+| Context, memory, skills | Compaction, `IRINA.md`, `SKILL.md`, `use_skill` | [src/back/harness/context_management/README.md](src/back/harness/context_management/README.md) |
+| Demos | Dice, OpenShell, Stage 2 long-task demo | [demos/README.md](demos/README.md) |
 | Tests | What is tested and how to run it | [tests/README.md](tests/README.md) |
 
 ## Quick start
@@ -69,10 +77,23 @@ command and path-escape guardrails, and deletes the sandbox. The
 [tools and guardrails README](src/back/harness/tools_and_guardrails/README.md)
 has the policy details.
 
+The Stage 2 demo uses the same OpenShell setup:
+
+```powershell
+python demos/stage2_context_memory_skills.py
+```
+
+It runs the long five-file task under a 1,500-token context budget, memory across
+a fresh session, and a runtime-created skill. See the
+[context, memory, and skills README](src/back/harness/context_management/README.md)
+for the details.
+
 ## Layout
 
 ```
-src/back/harness/                   Agent loop, providers, tools, OpenShell
+src/back/harness/                   Agent loop, providers, tools, OpenShell, context
+src/back/harness/context_management/
+                                    Compaction, memory, skills, task state
 demos/                              Runnable examples and live checks
 tests/                              Offline unit tests and sandbox integration tests
 src/back/datasets/                  Dataset code (later)
@@ -82,9 +103,9 @@ src/back/opik/                      Opik source for local tracing and evaluation
 src/front/                          Frontend application
 ```
 
-`harness/loop`, `harness/providers`, and `harness/tools_and_guardrails` are
-implemented. The other folders under `src/back/harness/` are placeholders for
-later work.
+`harness/loop`, `harness/providers`, `harness/tools_and_guardrails`, and
+`harness/context_management` are implemented. The other folders under
+`src/back/harness/` are placeholders for later work.
 
 ## Opik local UI
 
@@ -93,9 +114,11 @@ setup and common commands.
 
 ## Limits
 
-No memory, multi-agent work, skills, saved sessions, context compaction, async
-runs, or finer-grained permissions yet. Day 2's sandboxing is a local OpenShell
-0.1.5 setup launched through WSL 2, not a production multi-tenant deployment.
-The local file-only tool mode exists for tests and development; it is not an
-isolation boundary. A run that hits a limit stops; it is not turned into a
-success. The [harness README](src/back/harness/README.md#limits) has the details.
+No multi-agent work, saved sessions, async runs, or finer-grained permissions
+yet. Project memory is a bounded Markdown file, not a vector database or semantic
+search. Skills use simple front matter and do not grant permissions. `pending_steps`
+is not inferred from model text. Day 2's sandboxing is a local OpenShell 0.1.5
+setup launched through WSL 2, not a production multi-tenant deployment. The local
+file-only tool mode exists for tests and development; it is not an isolation
+boundary. A run that hits a limit stops; it is not turned into a success. The
+[harness README](src/back/harness/README.md#limits) has the details.

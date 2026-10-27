@@ -8,7 +8,7 @@ gateway and create a real sandbox; they skip when OpenShell is unavailable.
 python -m unittest discover -s tests -v
 ```
 
-Current run: **100 tests, OK** (1 skip for Windows symlink creation). Eight of
+Current run: **147 tests, OK** (2 skips for Windows symlink creation). Eight of
 those tests use a real OpenShell sandbox; that class creates one sandbox and
 deletes it afterwards.
 
@@ -69,10 +69,54 @@ deletes it afterwards.
 - a scripted agent receiving `BLOCKED` for a destructive command
 - a scripted agent receiving a `PermissionError` observation for a path escape
 
+`test_context.py`:
+
+- token estimation and provider-usage calibration
+- compaction that preserves complete tool-call groups
+- original-task, recent-group, and task-state preservation
+- preservation-boundary moves under tight budgets
+- fixed system/tool reserve accounting
+- pending, orphaned, and duplicate tool-call failures
+- provider failure, empty summary, and oversized-summary handling
+- `context_compacted` event fields
+- task-state updates from actual tool results
+
+`test_memory.py`:
+
+- base prompt and memory section ordering
+- add, dedupe, update, and bounded `IRINA.md`
+- secret rejection and redaction
+- missing, unreadable, and oversized memory
+- cross-session persistence
+- `remember` policy behavior
+
+`test_skills.py`:
+
+- catalog discovery, front matter, sorting, and malformed names
+- catalog prompt and full skill loading
+- missing, invalid, oversized, and empty skills
+- secret redaction and symlink escape handling
+- `use_skill` and read-only policy behavior
+
+`test_stage2_security.py`:
+
+- memory and skill operations fail without a sandbox
+- prompt construction omits unavailable storage
+- memory and skill text cannot change policy or sandbox rules
+- traversal names are rejected
+
 The integration class starts one sandbox and deletes it after the class. It does
 not print credentials.
 
+Stage 2 checks can be run separately:
+
+```powershell
+python -m unittest tests.test_context tests.test_memory tests.test_skills tests.test_stage2_security -v
+```
+
 See the [tools and guardrails README](../src/back/harness/tools_and_guardrails/README.md)
-for the sandbox policy. The live checks are separate:
+for the sandbox policy and the
+[context, memory, and skills README](../src/back/harness/context_management/README.md)
+for compaction and memory/skill behavior. The live checks are separate:
 [demos/README.md](../demos/README.md). Back to the
 [harness overview](../src/back/harness/README.md).

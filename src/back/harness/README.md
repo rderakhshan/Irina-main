@@ -4,8 +4,8 @@ The harness runs one conversation from start to finish. It asks the model for a
 reply, runs any tools the model asks for, and stops for a clear reason.
 
 The loop is deliberately small. Day 1 added one model adapter and a dice demo;
-Day 2 adds six workspace tools and an OpenShell sandbox without changing the
-loop.
+Day 2 added six workspace tools and an OpenShell sandbox. Stage 2 adds context
+compaction, durable memory, and skills without changing the loop.
 
 ## Files
 
@@ -17,11 +17,13 @@ loop.
 | `providers/base.py` | Defines what a provider must implement and the shared data types. |
 | `providers/deepseek.py` | Talks to the DeepSeek Chat Completions API. |
 | `tools_and_guardrails/` | Six workspace tools, permission policy, shell, and OpenShell adapter. |
+| `context_management/` | Compaction, task state, `IRINA.md` memory, and skills. |
 
 ## How a run works
 
 1. Check whether the caller cancelled and whether time or a budget is used up.
 2. Give an optional `before_turn` hook a chance to change the transcript.
+   Stage 2 uses this for context compaction.
 3. Ask the provider for a reply.
 4. Add the reply and its token use to the run.
 5. If the reply asks for tools, run them one at a time.
@@ -90,6 +92,7 @@ complete.
 - [Loop](loop/README.md) — turn order, completion rules, events.
 - [Providers](providers/README.md) — model adapter and retries.
 - [Tools and guardrails](tools_and_guardrails/README.md) — six tools, policy, OpenShell.
+- [Context, memory, skills](context_management/README.md) — compaction, task state, `IRINA.md`, `SKILL.md`.
 - [Demos](../../../demos/README.md) — dice demo, live check, OpenShell workspace demo.
 - [Tests](../../../tests/README.md) — offline test coverage.
 - [Project overview](../../../README.md) — the short version.

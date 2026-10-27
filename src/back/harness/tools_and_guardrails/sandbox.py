@@ -225,6 +225,7 @@ class OpenShellSandbox:
             )
 
         existing = self._get_sandbox()
+        created = existing is None
         if existing is not None:
             phase = str(existing.get("phase", ""))
             if phase != "Ready":
@@ -242,7 +243,17 @@ class OpenShellSandbox:
         else:
             self.sandbox_info = self._create()
 
-        self._setup_workspace()
+        try:
+            self._setup_workspace()
+        except Exception:
+            if created:
+                try:
+                    self._cli(
+                        ["sandbox", "delete", self.name], timeout=120
+                    )
+                except Exception:
+                    pass
+            raise
         self._started = True
         return self
 

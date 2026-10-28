@@ -230,16 +230,125 @@ def probe_all(*, storage_dir: str | Path | None = None) -> list[ProviderStatus]:
     ]
 
 
+def register_provider(
+    provider_id: str,
+    *,
+    module: str,
+    class_name: str,
+    implementation_root: str | Path,
+    origin: str = "evolved",
+    dependencies: list[str] | None = None,
+) -> dict[str, Any]:
+    """Register generated provider code for this process.
+
+    The provider is loaded from ``implementation_root`` by file path, never by
+    mutating the vendored package. Registration makes an approved evolved
+    architecture loadable by the ordinary adapter.
+    """
+    provider_id = provider_id.strip().lower()
+    spec = {
+        "display_name": provider_id,
+        "module": module,
+        "class": class_name,
+        "origin": origin,
+        "dependencies": list(dependencies or []),
+        "implementation_root": str(Path(implementation_root).resolve()),
+    }
+    PROVIDERS[provider_id] = spec
+    return spec
+
+
+@contextmanager
+def _generated_package(root: str | Path) -> Iterator[Path]:
+    """Expose a generated ``EvolveLab`` tree without touching the vendored one."""
+    root_path = Path(root).resolve()
+    with _PATH_LOCK:
+        saved = {
+            name: module
+            for name, module in sys.modules.items()
+            if name == "EvolveLab" or name.startswith("EvolveLab.")
+        }
+        for name in saved:
+            del sys.modules[name]
+        sys.path.insert(0, str(root_path))
+        try:
+            yield root_path
+        finally:
+            try:
+                sys.path.remove(str(root_path))
+            except ValueError:
+                pass
+            for name in [
+                name
+                for name in sys.modules
+                if name == "EvolveLab" or name.startswith("EvolveLab.")
+            ]:
+                del sys.modules[name]
+            sys.modules.update(saved)
+
+
+def _load_generated_provider(
+    provider_id: str,
+    spec: dict[str, Any],
+    config: dict[str, Any],
+) -> Any:
+    root = Path(spec["implementation_root"])
+    module_name = spec["module"]
+    relative = module_name.replace(".", "/") + ".py"
+    path = root / relative
+    if not path.is_file():
+        raise RuntimeError(
+            f"generated provider module is missing: {path}"
+        )
+    types: dict[str, Any] = {}
+    with _generated_package(root):
+        import uuid
+
+        name = f"_irina_evolved_{provider_id}_{uuid.uuid4().hex[:8]}"
+        module_spec = importlib.util.spec_from_file_location(name, path)
+        if module_spec is None or module_spec.loader is None:
+            raise RuntimeError(f"cannot load generated provider: {path}")
+        module = importlib.util.module_from_spec(module_spec)
+        sys.modules[name] = module
+        try:
+            module_spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(name, None)
+            raise
+        cls = getattr(module, spec["class"])
+        types_module = sys.modules.get("EvolveLab.memory_types")
+        if types_module is not None:
+            types = {
+                attr: getattr(types_module, attr)
+                for attr in (
+                    "TrajectoryData",
+                    "MemoryRequest",
+                    "MemoryResponse",
+                    "MemoryItem",
+                    "MemoryItemType",
+                    "MemoryStatus",
+                )
+                if hasattr(types_module, attr)
+            }
+        instance = cls(config or {})
+    instance._irina_types = types
+    instance._irina_provider_id = provider_id
+    return instance
+
+
 def load_provider(provider_id: str, config: dict[str, Any] | None = None) -> Any:
     """Load an actual upstream provider class and initialize one instance."""
     provider_id = provider_id.lower()
     if provider_id not in PROVIDERS:
         raise KeyError(f"unknown memory provider {provider_id!r}")
     spec = PROVIDERS[provider_id]
-    with upstream_imports():
-        module = importlib.import_module(spec["module"])
-        cls = getattr(module, spec["class"])
-        instance = cls(config or {})
+    if spec.get("implementation_root"):
+        instance = _load_generated_provider(provider_id, spec, config or {})
+    else:
+        with upstream_imports():
+            module = importlib.import_module(spec["module"])
+            cls = getattr(module, spec["class"])
+            instance = cls(config or {})
     if not instance.initialize():
         raise RuntimeError(f"upstream provider {provider_id!r} failed to initialize")
     return instance

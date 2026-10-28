@@ -24,3 +24,24 @@ classes lazily instead of importing four provider modules eagerly. Upstream
 imported numpy, scikit-learn, and sentence-transformers merely to import the
 provider package. Lazy exports allow the dependency-free Lightweight provider
 to load while preserving the public class names.
+
+## Compatibility patch 2
+
+`FlashOAgents/__init__.py` and `MemEvolve/__init__.py` now export public names
+lazily. Upstream imported every FlashOAgents submodule (web search, crawling,
+media tools) and every evolution phase merely to import the package, so the
+original evolution core could not be imported without `requests`, `crawl4ai`,
+`pandas`, `biopython`, `python-pptx`, and other research-only packages.
+`base_agent.py` now imports `WebSearchTool`, `CrawlPageTool`,
+`VisualInspectorTool`, `AudioInspectorTool`, and `TextInspectorTool` inside the
+agent classes that use them instead of at module import time. No upstream
+algorithm or prompt was changed.
+
+## Compatibility patch 3
+
+`MemEvolve.core.memory_evolver.MemoryEvolver.create()` accepts an optional
+`base_dir` and defaults to its own `work_dir`. Upstream always passed `"."` to
+`MemorySystemCreator`, which wrote generated providers into the process working
+directory (and could mutate the vendored source tree). Irina passes an isolated
+copy of `EvolveLab/` under the evolution work directory, so generated code is
+never written into the vendored source.

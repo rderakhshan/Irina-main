@@ -23,3 +23,13 @@ memory-research = [
 memory-embeddings = [
     "sentence-transformers>=3.0",
 ]
+memory-evolution = [
+    "openai>=1.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "jinja2>=3.0",
+    "rich>=13.0",
+    "json-repair>=0.30",
+    "huggingface_hub>=0.29",
+    "pillow>=11.0",
+]

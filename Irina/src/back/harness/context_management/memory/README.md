@@ -17,9 +17,11 @@ Vendored upstream directories: `EvolveLab/`, `MemEvolve/`, `FlashOAgents/`,
 `storage/tools/`, `base_agent.py`, `evolve_cli.py`, `utils.py`, and
 `requirements.txt`. Research
 datasets, generated outputs, model caches, assets, and unrelated runners are
-not copied. The only upstream compatibility patch is lazy exports in
-`EvolveLab/providers/__init__.py`; it avoids importing optional research
-dependencies merely to import the package.
+not copied. Upstream compatibility patches are limited to lazy exports in
+`EvolveLab/providers/__init__.py`, `FlashOAgents/__init__.py`, and
+`MemEvolve/__init__.py`, lazy web/media tool imports in `base_agent.py`, and an
+optional `base_dir` for `MemoryEvolver.create()`. They are documented in
+`upstream/memevolve/PATCHES.md`; no algorithms or prompts were changed.
 
 ## Stable Irina interface
 
@@ -74,13 +76,23 @@ memory providers` probes and reports the actual state.
 
 The default active provider is `lightweight_memory` because it is dependency-
 free and can run in the ordinary environment. `expel` is the recommended
-baseline when the optional `memory-research` extra is installed:
+baseline when the optional `memory-research` extra is installed. The original
+evolution engine additionally needs the `memory-evolution` extra:
 
 ```powershell
 uv sync --extra memory-research
+uv sync --extra memory-evolution
 # sentence-transformer providers additionally need:
 uv sync --extra memory-embeddings
 ```
+
+Provider storage is workspace-scoped:
+`<state>/providers/<provider>/<workspace-id>/...`. Two projects that share one
+memory state root cannot retrieve each other's provider memories; only the
+canonical store and the architecture registry are shared state. Provider data
+created by older Irina versions used a shared directory; it is not attributed
+to a workspace automatically. Rebuild it with `memory replay` from canonical
+history.
 
 ## Retrieval and lifecycle
 
@@ -104,23 +116,34 @@ uses the active provider; `--memory-provider` selects an upstream identifier.
 ## Architecture evolution and migration
 
 `ArchitectureRegistry` stores architecture versions/states in the trusted
-state root and changes the active pointer atomically. `ReplayManager` replays
-canonical experiences into a separate target backend, records counts/timings/
-validation, never deletes the source, and rejects failed targets. The current
-implementation provides registry activation and rollback; promotion through the
-CLI is explicit (`--approve`) and never automatic.
+state root. Every mutation takes a cross-process lock, reloads the on-disk
+registry, and replaces the file atomically, so the running agent and CLI
+commands cannot clobber each other. The registry is authoritative on startup:
+a restart returns the approved active architecture instead of silently
+creating a new baseline for the default provider. `ReplayManager` replays
+canonical experiences into a separate, workspace-scoped target backend,
+records counts/timings/validation, never deletes the source, and rejects failed
+targets. Promotion through the CLI is explicit (`--approve`) and never
+automatic.
 
-`EvolutionBridge` invokes the original `MemEvolve.core.memory_evolver` stages
-when the optional research dependencies and the full FlashOAgents dependency
-set are available. The source is embedded, but this environment lacks
-`huggingface_hub` and other FlashOAgents dependencies, so the bridge reports
-`EvolutionUnavailable` rather than substituting a prompt-only imitation.
-`python main.py memory evolve ...` therefore exits with a dependency message in
-this checkout.
+`EvolutionBridge` invokes the original `MemEvolve.core.memory_evolver` stages:
+`analyze` → `generate` → `create` → `validate`. The engine is importable with
+the `memory-evolution` extra (lazy upstream exports keep web/media tools out of
+the import path). `create` writes into an isolated copy of `EvolveLab/` under
+the evolution work directory; the vendored source is never modified.
+
+The upstream `validate()` stage runs benchmark dataset runners that are not
+vendored with Irina. Without `--validation-dataset` the bridge marks that stage
+`skipped` and runs Irina's own static + isolated-import + provider-contract
+probe for each generated provider. Generated candidates are registered with
+`state="validated"` when the probe passes and `state="rejected"` otherwise.
+They are **never activated automatically**. On explicit
+`memory promote --approve`, Irina registers the provider module in-process and
+loads it by file path from the recorded implementation root, so a generated
+provider with a different schema or storage file can be activated and rolled
+back like any other architecture.
 
 `evaluation_bridge.py` provides deterministic coding fixtures and metrics.
-`security.py` performs static checks and a separate-process import smoke test;
-production promotion still requires explicit review and an isolation decision.
 
 ## CLI
 
@@ -131,8 +154,10 @@ uv run python main.py memory --workdir . inspect
 uv run python main.py memory select lightweight_memory
 uv run python main.py memory replay <target-arch> --target-provider lightweight_memory
 uv run python main.py memory candidates
+uv run python main.py memory evaluate <candidate>
 uv run python main.py memory promote <candidate> --approve
 uv run python main.py memory rollback
+uv run python main.py memory evolve --from-canonical --work-dir .irina/evolution
 ```
 
 The active selection is stored in the memory state root and is only changed by
@@ -147,19 +172,35 @@ uv run python main.py -p "Fix the failing test" --mode yolo --memory --memory-pr
 
 Upstream generated candidates are untrusted. The vendored source is never
 modified by candidates; static validation rejects obvious process/network
-escapes, and isolated import uses a separate Python process and temporary cwd.
+escapes, and isolated import uses a separate Python process, a temporary cwd,
+a minimal environment without provider credentials, and an explicit read-only
+`PYTHONPATH` for the candidate's `EvolveLab` tree. The probe additionally
+checks the `initialize` / `take_in_memory` / `provide_memory` contract and
+tries to construct the provider with a temporary storage directory.
 This smoke test is not a complete sandbox. Production promotion requires
 explicit approval, and the original OpenShell boundary remains in force for
-agent tools. Canonical experience storage is host-side, not writable by
-OpenShell tools. Provider credentials are not persisted in memory records;
-provider update failures retain only a bounded error description.
+agent tools. After that explicit approval, an evolved provider module is
+imported into the Irina process (from its recorded build tree), which is why
+approval is mandatory and never automatic. Canonical experience storage is
+host-side, not writable by OpenShell tools. Provider credentials are not
+persisted in memory records; provider update failures retain only a bounded
+error description.
 
 Known limitation: candidate isolation does not yet execute generated code
 inside OpenShell. Do not describe the smoke test as a complete security sandbox.
+
+Live evolution uses the original engine's environment contract:
+`OPENAI_API_KEY` and optional `OPENAI_BASE_URL` (an OpenAI-compatible endpoint
+such as DeepSeek). The engine's trajectory summary tool hardcodes
+`gpt-4o-mini`; on non-OpenAI endpoints that summary step fails while analysis
+continues. Generated code is only as contract-compliant as the model output:
+Irina validates and rejects non-conforming candidates instead of repairing them
+silently.
 
 ## Tests
 
 ```powershell
 uv run python -m unittest tests.test_memory_integration -v
+uv run python -m unittest tests.test_memory_finalization -v
 uv run python -m unittest discover -s tests
 ```

@@ -125,12 +125,18 @@ class EvolveLabBackend:
                 error="backend is closed",
             )
         payload = upstream_payload(experience)
+        types = getattr(self.provider, "_irina_types", {}) or {}
         try:
-            with upstream_imports():
-                from EvolveLab.memory_types import TrajectoryData
+            TrajectoryData = types.get("TrajectoryData")
+            if TrajectoryData is None:
+                with upstream_imports():
+                    from EvolveLab.memory_types import (
+                        TrajectoryData as _TrajectoryData,
+                    )
 
-                data = TrajectoryData(**payload)
-                ok, description = self.provider.take_in_memory(data)
+                TrajectoryData = _TrajectoryData
+            data = TrajectoryData(**payload)
+            ok, description = self.provider.take_in_memory(data)
             return MemoryUpdateResult(
                 bool(ok),
                 str(description),
@@ -154,20 +160,26 @@ class EvolveLabBackend:
     def retrieve(self, query: MemoryQuery) -> list[RetrievedMemory]:
         if self._closed:
             return []
+        types = getattr(self.provider, "_irina_types", {}) or {}
         try:
-            with upstream_imports():
-                from EvolveLab.memory_types import (
-                    MemoryRequest,
-                    MemoryStatus,
-                )
+            MemoryRequest = types.get("MemoryRequest")
+            MemoryStatus = types.get("MemoryStatus")
+            if MemoryRequest is None or MemoryStatus is None:
+                with upstream_imports():
+                    from EvolveLab.memory_types import (
+                        MemoryRequest as _MemoryRequest,
+                        MemoryStatus as _MemoryStatus,
+                    )
 
-                request = MemoryRequest(
-                    query=query.query,
-                    context=query.context,
-                    status=MemoryStatus.BEGIN,
-                    additional_params=query.metadata or {},
-                )
-                response = self.provider.provide_memory(request)
+                MemoryRequest = _MemoryRequest
+                MemoryStatus = _MemoryStatus
+            request = MemoryRequest(
+                query=query.query,
+                context=query.context,
+                status=MemoryStatus.BEGIN,
+                additional_params=query.metadata or {},
+            )
+            response = self.provider.provide_memory(request)
             results = []
             for item in response.memories:
                 content = getattr(item, "content", None)

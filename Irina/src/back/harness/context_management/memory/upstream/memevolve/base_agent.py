@@ -19,7 +19,6 @@ from utils import safe_json_loads
 
 from FlashOAgents import ToolCallingAgent
 from FlashOAgents import ActionStep, PlanningStep, TaskStep, SummaryStep
-from FlashOAgents import WebSearchTool, CrawlPageTool, VisualInspectorTool, AudioInspectorTool, TextInspectorTool
 
 load_dotenv(override=True)
 
@@ -98,6 +97,7 @@ class SearchAgent(BaseAgent):
     def __init__(self, model, summary_interval, prompts_type, max_steps, memory_provider=None, **kwargs):
         super().__init__(model)
 
+        from FlashOAgents import WebSearchTool, CrawlPageTool
         web_tool = WebSearchTool()
         crawl_tool = CrawlPageTool(model=model)
         tools = [web_tool, crawl_tool]
@@ -114,6 +114,13 @@ class MMSearchAgent(BaseAgent):
     def __init__(self, model, summary_interval, prompts_type, max_steps, memory_provider=None, **kwargs):
         super().__init__(model)
 
+        from FlashOAgents import (
+            WebSearchTool,
+            CrawlPageTool,
+            VisualInspectorTool,
+            AudioInspectorTool,
+            TextInspectorTool,
+        )
         web_tool = WebSearchTool()
         crawl_tool = CrawlPageTool(model=model)
         visual_tool = VisualInspectorTool(model, 100000)

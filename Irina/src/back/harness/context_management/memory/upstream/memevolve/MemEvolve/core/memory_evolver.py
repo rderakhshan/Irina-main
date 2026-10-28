@@ -295,12 +295,15 @@ class MemoryEvolver:
             "config": result["config"]
         }
     
-    def create(self, config_path: Optional[str] = None) -> Dict:
+    def create(self, config_path: Optional[str] = None, base_dir: Optional[str] = None) -> Dict:
         """
         Create memory system files using MemorySystemCreator
         
         Args:
             config_path: Optional path to generated system config. If not provided, uses state.
+            base_dir: Tree that receives the generated provider. Defaults to the
+                evolution work directory so imports never write into the caller's
+                current working directory.
         
         Returns:
             Creation result with created system name
@@ -319,7 +322,7 @@ class MemoryEvolver:
         enum_value = config["memory_type_info"]["enum_value"]
         print(f"[Create] System: {enum_value}")
         
-        result = MemorySystemCreator.create_memory_system(config, base_dir=".")
+        result = MemorySystemCreator.create_memory_system(config, base_dir=base_dir or str(self.work_dir))
         
         created_systems = []
         failed_systems = []

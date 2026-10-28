@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -112,6 +113,69 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
 
 
+class EnvDefaultTests(unittest.TestCase):
+    def test_application_env_defaults_fill_missing_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            present = Path(temp) / "examples"
+            present.mkdir()
+            env = {
+                "IRINA_SANDBOX_IMAGE": "irina/application-tex:1",
+                "IRINA_INPUTS": "cv.tex;reference.pdf",
+                "IRINA_OPTIONAL_INPUTS": f"{present};missing-dir",
+                "IRINA_EXPORT_PATHS": "application",
+                "IRINA_ARTIFACTS_DIR": "D:\\Application",
+                "IRINA_EXPORT_CONTENTS": "1",
+                "IRINA_AUTO_EXPORT": "1",
+                "IRINA_MODE": "yolo",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                args = cli.build_parser().parse_args([])
+                cli._apply_env_defaults(args)
+            self.assertEqual(args.sandbox_image, "irina/application-tex:1")
+            self.assertEqual(
+                args.inputs, ["cv.tex", "reference.pdf", str(present)]
+            )
+            self.assertEqual(args.export_paths, ["application"])
+            self.assertEqual(args.artifacts_dir, "D:\\Application")
+            self.assertTrue(args.export_contents)
+            self.assertTrue(args.auto_export)
+            self.assertEqual(args.mode, "yolo")
+
+    def test_require_gate_skips_all_env_defaults(self) -> None:
+        env = {
+            "IRINA_DEFAULTS_REQUIRE": "definitely-missing-file",
+            "IRINA_SANDBOX_IMAGE": "env-image",
+            "IRINA_INPUTS": "env-input",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            args = cli.build_parser().parse_args([])
+            cli._apply_env_defaults(args)
+        self.assertIsNone(args.sandbox_image)
+        self.assertEqual(args.inputs, [])
+
+    def test_explicit_flags_are_not_replaced(self) -> None:
+        env = {
+            "IRINA_SANDBOX_IMAGE": "env-image",
+            "IRINA_INPUTS": "env-input",
+            "IRINA_EXPORT_PATHS": "env-export",
+            "IRINA_ARTIFACTS_DIR": "env-artifacts",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            args = cli.build_parser().parse_args(
+                [
+                    "--sandbox-image", "cli-image",
+                    "--input", "cli-input",
+                    "--export", "cli-export",
+                    "--artifacts-dir", "cli-artifacts",
+                ]
+            )
+            cli._apply_env_defaults(args)
+        self.assertEqual(args.sandbox_image, "cli-image")
+        self.assertEqual(args.inputs, ["cli-input"])
+        self.assertEqual(args.export_paths, ["cli-export"])
+        self.assertEqual(args.artifacts_dir, "cli-artifacts")
+
+
 class PolicyTests(unittest.TestCase):
     def test_safe_interactive_has_an_approver_but_headless_does_not(self) -> None:
         parser = cli.build_parser()
@@ -179,6 +243,43 @@ class EventTests(unittest.TestCase):
             stream=stream,
         )
         self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz", stream.getvalue())
+
+
+class PromptInputTests(unittest.TestCase):
+    def test_multiline_paste_reads_until_terminator(self) -> None:
+        lines = iter(["Line one.", "Line two.", '"""', "ignored"])
+        text = cli._read_multiline(lambda _: next(lines))
+        self.assertEqual(text, "Line one.\nLine two.")
+
+    def test_multiline_paste_accepts_end_marker(self) -> None:
+        lines = iter(["only line", "/end"])
+        self.assertEqual(
+            cli._read_multiline(lambda _: next(lines)), "only line"
+        )
+
+    def test_prompt_file_is_bounded_and_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "jd.txt"
+            path.write_text("Full job description.\n", encoding="utf-8")
+            self.assertEqual(
+                cli._task_from_file(f'"{path}"'), "Full job description."
+            )
+
+    def test_paste_markers_are_removed(self) -> None:
+        self.assertEqual(
+            cli._clean_paste("\x1b[200~hello\nworld\x1b[201~"),
+            "hello\nworld",
+        )
+
+    def test_capture_prompt_keeps_commands_and_single_lines(self) -> None:
+        self.assertEqual(cli._capture_prompt("exit"), "exit")
+        self.assertEqual(cli._capture_prompt("/file jd.txt"), "/file jd.txt")
+        self.assertEqual(cli._capture_prompt("hello"), "hello")
+
+    def test_prompt_file_flag_is_exposed(self) -> None:
+        parser = cli.build_parser()
+        args = parser.parse_args(["--prompt-file", "jd.txt"])
+        self.assertEqual(args.prompt_file, "jd.txt")
 
 
 class HeadlessTests(unittest.TestCase):

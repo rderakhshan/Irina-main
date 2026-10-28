@@ -8,7 +8,7 @@ gateway and create a real sandbox; they skip when OpenShell is unavailable.
 python -m unittest discover -s tests -v
 ```
 
-Current full run: **295 tests, OK** (2 skips for Windows symlink creation).
+Current full run: **316 tests, OK** (2 skips for Windows symlink creation).
 OpenShell integration tests run when the local gateway is available and skip
 when it is not. Stage 4/5/6 live checks are separate; see the demo and memory
 READMEs.
@@ -98,6 +98,13 @@ READMEs.
 - missing, invalid, oversized, and empty skills
 - secret redaction and symlink escape handling
 - `use_skill` and read-only policy behavior
+- host `--skills-dir` upload: valid-only filtering, repeatability, missing host tree
+- complete skill directories: `SKILL.md`, assets, and scripts
+- `--input` upload and `--export`/`--artifacts-dir` download before cleanup
+- seeding happens before the system prompt is built; CLI flag parsing
+- first-run creation of `skills/` with README and `.gitkeep`
+- draft capture for new/modified skills, idempotent sync, no overwrite of trusted skills
+- explicit promote/discard, force-overwrite refusal, and Harness close-time sync
 
 `test_stage2_security.py`:
 
@@ -148,6 +155,7 @@ READMEs.
 - interactive prompt loop and `continue_task` follow-ups
 - event/output redaction
 - startup errors and workspace preparation
+- `/paste` multi-line input, `/file`, and `--prompt-file` loading
 
 `test_fleet.py`:
 

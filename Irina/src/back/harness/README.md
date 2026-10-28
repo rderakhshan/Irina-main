@@ -1,4 +1,4 @@
-﻿# Harness
+# Harness
 
 The harness runs one conversation from start to finish. It asks the model for a
 reply, runs any tools the model asks for, and stops for a clear reason.
@@ -289,7 +289,7 @@ python demos/stage5_streaming.py --live --plain
 - Safe write: visibly blocked; `false`: visibly failed; `--plain`: no ANSI.
 - Controlled cancellation: session status `interrupted`, zero tools executed.
 - Fleet display: serialized prefixed output in the synthetic demo.
-- Offline suite: **295 tests, OK (2 skipped)**, including memory finalization and
+- Offline suite: **316 tests, OK (2 skipped)**, including memory finalization and
   logging coverage.
 
 ## Stage 6: EvolveLab and canonical memory

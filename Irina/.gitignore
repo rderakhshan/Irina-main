@@ -6,3 +6,6 @@ __pycache__/
 .irina/
 sessions/
 .challenge/
+skills/*
+!skills/README.md
+!skills/.gitkeep

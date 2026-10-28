@@ -13,7 +13,7 @@ from src.back.harness.orchestration.cli import main as cli_main
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the Irina CLI or the memory administration commands."""
+    """Run the Irina CLI or an administration command."""
     values = list(argv) if argv is not None else sys.argv[1:]
     if values and values[0] == "memory":
         from src.back.harness.context_management.memory.cli import (
@@ -21,6 +21,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         return memory_main(values[1:])
+    if values and values[0] == "skills":
+        from src.back.harness.context_management.skills_cli import (
+            main as skills_main,
+        )
+
+        return skills_main(values[1:])
     return cli_main(values)
 
 

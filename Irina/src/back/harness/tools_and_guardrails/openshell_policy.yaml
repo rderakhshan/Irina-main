@@ -15,6 +15,9 @@ filesystem_policy:
     - /etc/ld.so.cache
     - /etc/ssl
     - /etc/nsswitch.conf
+    - /etc/texmf
+    - /etc/fonts
+    - /var/lib/texmf
     - /etc/hosts
     - /etc/resolv.conf
     - /proc

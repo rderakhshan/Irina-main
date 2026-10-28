@@ -18,7 +18,8 @@ vendored EvolveLab/MemEvolve integration; see [memory/README.md](memory/README.m
 | `context.py` | Token estimate, one-call compaction, task state, events. |
 | `memory/legacy.py` | Base system prompt, `IRINA.md` loading, `remember`, memory tool. |
 | `memory/` | Canonical experiences, EvolveLab adapters, replay/evolution bridges, vendored upstream source. |
-| `skills.py` | Catalog, front-matter parsing, `read_skill`, `use_skill` tool. |
+| `skills.py` | Catalog, front-matter parsing, `read_skill`, `use_skill`, host seeding, and draft sync. |
+| `skills_cli.py` | `skills list`, `skills promote`, and `skills discard`. |
 | `__init__.py` | Public exports for the rest of the harness. |
 
 ## Context compaction
@@ -127,6 +128,72 @@ reads instructions.
 Skills are lower-trust instructions. They cannot grant permissions or change
 sandbox rules.
 
+## Installing host skills
+
+Put skills in the host project as `skills/<name>/SKILL.md`. On the first run
+Irina creates the directory with a `README.md` and `.gitkeep`, then uploads
+valid files into the sandbox before the system prompt is built:
+
+```powershell
+uv run python main.py                              # uses ./skills
+uv run python main.py --skills-dir .\skills
+uv run python main.py --skills-dir ""     # disable upload
+```
+
+`--skills-dir` defaults to `./skills` (relative to the current directory; a
+missing relative path is also looked up under `--workdir`). The whole skill
+directory is uploaded, including `assets/` and `scripts/`; binary files use the
+sandbox upload path. Only one level of `<name>/SKILL.md` is accepted. Invalid
+names, symlinks, empty files, oversized `SKILL.md` files, and excessive asset
+totals are skipped. Existing sandbox copies are replaced, so an edited host
+skill takes effect on the next run or resume.
+
+Skills that need input files or produce files use explicit transfer flags. No
+host mount exists:
+
+```powershell
+uv run python main.py `
+  --skills-dir .\skills `
+  --input .\input-cv\resume.tex `
+  --export application `
+  --export-contents `
+  --artifacts-dir "D:\Application" `
+  --sandbox-image irina/application-tex:1 `
+  --mode yolo -p "Prepare the application"
+```
+
+`--input` uploads a file to `input/<filename>` or a directory tree to
+`input/<dirname>/...`. `--export` names a workspace path downloaded on clean
+shutdown into `--artifacts-dir`. With `--export-contents`, a directory's
+children merge directly into the host directory, so
+`application/<Company>/` becomes `D:\Application\<Company>\`. Existing
+targets are refused unless `--force` is passed. Use `/export` in an interactive
+session to save immediately, or `--auto-export` to save after each completed
+run. The image
+flag selects an approved OpenShell image with extra tools. For the included
+`application` skill, build [images/application](../../../../images/application/README.md)
+with TeX Live, Poppler, and pypdf.
+
+Skills created or modified by Irina during a run are not written into the
+trusted folder. They are captured on clean shutdown under:
+
+```text
+<state>/skill-drafts/<workspace-key>/<name>/SKILL.md
+```
+
+Review and promote them explicitly:
+
+```powershell
+uv run python main.py skills --workdir . list
+uv run python main.py skills --workdir . promote <name>
+uv run python main.py skills --workdir . discard <name>
+```
+
+`promote` refuses to overwrite an existing trusted skill unless `--force` is
+passed. This review gate exists because skills are instructions for future
+runs: auto-persisting agent-written skills would let one bad run poison later
+runs.
+
 ## Integration
 
 - `before_turn` calls `compact`; the agent loop is unchanged.
@@ -154,7 +221,7 @@ python -m unittest tests.test_context tests.test_memory tests.test_skills tests.
 python demos/stage2_context_memory_skills.py
 ```
 
-Current full offline suite: **295 tests, OK** with 2 Windows symlink skips. The live Stage 2
+Current full offline suite: **316 tests, OK** with 2 Windows symlink skips. The live Stage 2
 demo passed:
 
 - **A:** five files, correct manifest, independent `wc -l` check, three

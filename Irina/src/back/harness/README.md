@@ -289,7 +289,8 @@ python demos/stage5_streaming.py --live --plain
 - Safe write: visibly blocked; `false`: visibly failed; `--plain`: no ANSI.
 - Controlled cancellation: session status `interrupted`, zero tools executed.
 - Fleet display: serialized prefixed output in the synthetic demo.
-- Offline suite: 270 tests, OK (2 skipped). Nine real OpenShell tests were not rerun because the local Docker service was unavailable.
+- Offline suite: **295 tests, OK (2 skipped)**, including memory finalization and
+  logging coverage.
 
 ## Stage 6: EvolveLab and canonical memory
 
@@ -301,31 +302,43 @@ manifest, and compatibility notes. The provider adapter uses the real
 
 Irina adds:
 
-- a stable `MemoryBackend` adapter;
+- a stable `MemoryBackend` adapter that hides provider paths and schemas;
 - a canonical, append-only experience store with stable IDs, schema versioning,
-  redaction, recovery, idempotency, and workspace isolation;
+  redaction, torn-line recovery, idempotency, and workspace isolation;
 - a trajectory bridge that preserves tool IDs and labels outcomes from observed
   evidence rather than assistant prose;
 - bounded, lower-trust retrieval injection into the system prompt;
 - post-task updates with an audit ledger and nonfatal failure handling;
-- an architecture registry, canonical replay, rollback, coding evaluation
-  fixtures, candidate safety checks, and a lazy bridge to the original
-  MemEvolve engine.
+- workspace-scoped provider storage, so shared memory roots do not leak between
+  projects;
+- an architecture registry with isolated candidate storage, one atomic active
+  pointer, replay, explicit promotion, and rollback;
+- the original MemEvolve analyze/generate/create/validate workflow, writing into
+  an isolated build tree and never modifying the vendored source;
+- a candidate gate (static AST, separate-process import, provider contract,
+  instantiation) and in-process loading only after `--approve`;
+- quiet-by-default memory logging; `--verbose` adds theme-colored diagnostics
+  while errors stay visible.
 
 Available/tested here:
 
-- `lightweight_memory`: original upstream provider, initialized and integrated.
-- `expel`: original upstream provider, imported with the `memory-research`
-  extra and exercised with a real DeepSeek memory model.
+- `lightweight_memory`: dependency-free upstream provider; integrated and the
+  default.
+- `expel`: original upstream provider, imported with the `memory-research` extra
+  and exercised with a real DeepSeek memory model.
 - Canonical + ExpeL live memory check: update succeeded, canonical count 1,
-  retrieval returned 967 characters of labeled historical context.
+  retrieval returned labeled historical context.
+- Live DeepSeek evolution reached analysis, generation, and creation. The
+  generated provider was correctly rejected for a missing `initialize()`; a
+  controlled fixture candidate passed the same gate and was registered
+  `validated` without activation.
 
 The remaining providers are discovered with separate source/import/init/
 integration statuses. Missing optional dependencies are reported as blocked.
-Memory is opt-in for the harness/CLI. MemEvolve evolution is vendored but its
-optional FlashOAgents dependency set is not installed in this environment;
-`memory evolve` reports the exact blocker rather than substituting a prompt-only
-implementation.
+Memory is opt-in for the harness/CLI. Evolution needs the `memory-evolution`
+extra; upstream dataset validation is skipped unless a dataset runner is
+provided. Canonical replay, activation, rollback, and evolved-provider loading
+are implemented. See [the memory README](context_management/memory/README.md).
 
 ## Limits
 
@@ -355,23 +368,29 @@ The cross-chunk redactor is bounded and documented; it does not claim absolute
 secret detection. Streaming usage is zero when the provider omits usage rather
 than being invented.
 
-Stage 6 limits: only tested providers are claimed integrated. Optional research
-dependencies and the FlashOAgents engine dependency set are isolated. Candidate
-validation currently uses static AST checks plus a separate-process import
-smoke test, not a complete OpenShell execution sandbox. Promotion is explicit;
-canonical replay is supported, but provider-specific direct migration is not
-implemented.
+Stage 6 limits: only tested providers are claimed integrated; optional research
+dependencies are isolated and reported as blocked when absent. Upstream
+benchmark-dataset validation is skipped unless a dataset runner is supplied.
+Generated code is only as contract-compliant as the model output; Irina rejects
+non-conforming candidates instead of repairing them. Candidate validation is a
+bounded static + separate-process probe, not an OpenShell execution sandbox;
+activation imports generated code into the Irina process only after explicit
+`--approve`. Legacy shared provider storage is not auto-attributed to a
+workspace; rebuild it with `memory replay`. Live evolution uses the engine's
+`OPENAI_API_KEY`/`OPENAI_BASE_URL` contract and its trajectory summary tool
+still defaults to `gpt-4o-mini`.
 
 ## More detail
 
-- [Loop](loop/README.md) â€” turn order, completion rules, events.
-- [Providers](providers/README.md) â€” model adapter and retries.
-- [Tools and guardrails](tools_and_guardrails/README.md) â€” six tools, policy, OpenShell.
-- [Context, memory, skills](context_management/README.md) â€” compaction, task state, `IRINA.md`, `SKILL.md`.
-- [Stage 3 sub-agent demo](../../../demos/stage3_subagents.py) â€” deterministic sequential delegation.
+- [Loop](loop/README.md) - turn order, completion rules, events.
+- [Providers](providers/README.md) - model adapter and retries.
+- [Tools and guardrails](tools_and_guardrails/README.md) - six tools, policy, OpenShell.
+- [Context, memory, skills](context_management/README.md) - compaction, task state, `IRINA.md`, `SKILL.md`.
+- [Memory and evolution](context_management/memory/README.md) - lifecycle, providers, replay, evolution, safety, logging.
+- [Stage 3 sub-agent demo](../../../demos/stage3_subagents.py) - deterministic sequential delegation.
 - [Stage 4 fleet demo](../../../demos/stage4_projects.py) - parallel product builds and verification.
 - [Stage 4 results](../../../stage4_results.json) - checks, hashes, and sessions.
 - [Stage 5 streaming demo](../../../demos/stage5_streaming.py) - real and synthetic terminal UI checks.
-- [Demos](../../../demos/README.md) - dice, OpenShell, Stage 2, Stage 3, Stage 4, Stage 5.
-- [Tests](../../../tests/README.md) â€” unit and OpenShell integration coverage.
-- [Project overview](../../../README.md) â€” the short version.
+- [Demos](../../../demos/README.md) - dice, OpenShell, Stage 2, Stage 3, Stage 4, Stage 5, Stage 6.
+- [Tests](../../../tests/README.md) - unit and OpenShell integration coverage.
+- [Project overview](../../../README.md) - the short version.

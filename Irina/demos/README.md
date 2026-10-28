@@ -232,11 +232,30 @@ uv run python demos/stage6_memory.py --evolution
 `--memory` uses a controlled canonical coding experience, then calls the real
 upstream provider. `--provider lightweight_memory --fake` is deterministic;
 `--provider expel` uses the optional `memory-research` extra and the configured
-DeepSeek model. `--evolution` reports the missing FlashOAgents dependencies
-instead of pretending to run MemEvolve.
+DeepSeek model. `--evolution` reports the original engine's dependency and
+import status; use the CLI for a full evolution run.
 
 Actual observed ExpeL check in this checkout: `update=True`, canonical count
 `1`, retrieval returned `967` characters of labeled historical context.
+
+Memory visibility is a CLI concern, not a demo concern:
+
+```powershell
+uv run python main.py --memory -p "Fix the failing test"              # quiet
+uv run python main.py --memory --verbose -p "Fix the failing test"    # colored logs
+```
+
+A full evolution run starts from canonical history:
+
+```powershell
+$env:OPENAI_API_KEY = "<key>"
+$env:OPENAI_BASE_URL = "https://api.deepseek.com"
+uv run python main.py memory evolve --from-canonical --work-dir .irina/evolution
+```
+
+The engine writes generated providers into an isolated build tree. Irina
+validates and registers them; nothing is activated without
+`memory promote <candidate> --approve`.
 
 ## Setup
 

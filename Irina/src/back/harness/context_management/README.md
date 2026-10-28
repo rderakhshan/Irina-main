@@ -154,7 +154,7 @@ python -m unittest tests.test_context tests.test_memory tests.test_skills tests.
 python demos/stage2_context_memory_skills.py
 ```
 
-Current full offline suite: **270 tests, OK** with 2 Windows symlink skips. The live Stage 2
+Current full offline suite: **295 tests, OK** with 2 Windows symlink skips. The live Stage 2
 demo passed:
 
 - **A:** five files, correct manifest, independent `wc -l` check, three

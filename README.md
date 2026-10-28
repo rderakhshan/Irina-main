@@ -222,16 +222,27 @@ uv run python main.py memory status
 uv run python main.py memory providers
 uv run python main.py memory --workdir . inspect
 uv run python main.py memory select lightweight_memory
+uv run python main.py memory replay <target-arch> --target-provider lightweight_memory
+uv run python main.py memory candidates
+uv run python main.py memory evaluate <candidate>
+uv run python main.py memory promote <candidate> --approve
+uv run python main.py memory rollback
+uv run python main.py memory evolve --from-canonical --work-dir .irina/evolution
 uv run python main.py -p "Fix the failing test" --mode yolo --memory
 uv run python main.py -p "Fix the failing test" --mode yolo --memory --memory-provider expel
 ```
 
-Canonical experiences live under `~/.irina/memory` by default. Install the
-optional provider/research set with `uv sync --extra memory-research` (or
-`--extra memory-embeddings` for sentence-transformer providers). EvolveLab
-providers with missing optional research dependencies are reported as blocked;
-source presence is not treated as availability. MemEvolve evolution requires the
-additional FlashOAgents dependency set and is not silently replaced.
+Canonical experiences live under `~/.irina/memory` by default, and provider
+storage is scoped per workspace. Install the optional sets with
+`uv sync --extra memory-research` (providers), `--extra memory-embeddings`
+(sentence-transformer providers), and `--extra memory-evolution` (original
+MemEvolve engine). EvolveLab providers with missing optional research
+dependencies are reported as blocked; source presence is not treated as
+availability. The original evolution engine is callable, writes generated code
+into an isolated build tree, validates candidates with a static + isolated
+provider-contract probe, registers them without activating them, and skips the
+upstream benchmark-dataset validation stage unless `--validation-dataset` is
+provided.
 
 ## Layout
 

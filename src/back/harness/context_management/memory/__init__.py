@@ -12,6 +12,13 @@ from .architecture_registry import (
     ArchitectureRegistry,
 )
 from .configuration import EvolutionConfig, MemoryConfig, MemoryConfigError
+from .evolution_bridge import (
+    EvolutionBridge,
+    EvolutionResult,
+    EvolutionStatus,
+    EvolutionUnavailable,
+    export_trajectories,
+)
 from .experience_store import (
     ExperienceRecord,
     ExperienceStore,
@@ -44,6 +51,7 @@ from .retrieval_bridge import (
     RetrievedMemory,
     render_context,
 )
+from .security import CandidateValidation, validate_candidate
 from .trajectory_bridge import record_from_result, upstream_payload
 
 __all__ = [
@@ -51,12 +59,18 @@ __all__ = [
     "ArchitectureRecord",
     "ArchitectureRegistry",
     "BASE_SYSTEM_PROMPT",
+    "CandidateValidation",
     "DeepSeekMemoryModel",
     "EvolveLabBackend",
+    "EvolutionBridge",
     "EvolutionConfig",
+    "EvolutionResult",
+    "EvolutionStatus",
+    "EvolutionUnavailable",
     "ExperienceRecord",
     "ExperienceStore",
     "ExperienceStoreError",
+    "export_trajectories",
     "MEMORY_FILE",
     "MemoryBackend",
     "MemoryConfig",
@@ -84,5 +98,6 @@ __all__ = [
     "upstream_imports",
     "upstream_info",
     "upstream_payload",
+    "validate_candidate",
     "workspace_id",
 ]

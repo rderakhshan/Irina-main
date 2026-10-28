@@ -80,9 +80,9 @@ class MemoryConfig:
     def root(self) -> Path:
         raw = self.state_dir or os.environ.get("IRINA_MEMORY_STATE_DIR")
         return (
-            Path(raw).expanduser()
+            Path(raw).expanduser().resolve()
             if raw
-            else Path.home() / ".irina" / "memory"
+            else (Path.home() / ".irina" / "memory").resolve()
         )
 
     def provider_settings(self, provider_id: str | None = None) -> dict[str, Any]:

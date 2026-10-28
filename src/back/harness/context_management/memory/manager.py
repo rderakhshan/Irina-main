@@ -16,9 +16,9 @@ from .architecture_registry import (
     ArchitectureRegistry,
 )
 from .configuration import MemoryConfig
-from .experience_store import ExperienceRecord, ExperienceStore
+from .experience_store import ExperienceRecord, ExperienceStore, workspace_id
 from .migration import ReplayManager
-from .provider_registry import UPSTREAM_COMMIT, PROVIDERS
+from .provider_registry import UPSTREAM_COMMIT, PROVIDERS, register_provider
 from .retrieval_bridge import MemoryQuery, RetrievedMemory, render_context
 
 
@@ -37,6 +37,7 @@ class MemoryManager:
         self.config = config
         self.workspace = str(Path(workspace).resolve())
         self.root = Path(state_root or config.root).expanduser().resolve()
+        self.workspace_key = workspace_id(self.workspace)
         self.store = ExperienceStore(self.root, self.workspace)
         self.registry = ArchitectureRegistry(self.root)
         self._lock = threading.RLock()
@@ -48,12 +49,74 @@ class MemoryManager:
         self._active = self.registry.ensure_baseline(
             config.active_provider,
             storage_namespace=str(
-                self.root / "providers" / config.active_provider
+                self._provider_namespace(config.active_provider)
             ),
             upstream_commit=UPSTREAM_COMMIT,
         )
+        # The registry is authoritative: an approved activation survives a
+        # restart even when the caller passes the default provider id.
+        active_provider = str(
+            self._active.configuration.get("provider", config.active_provider)
+        ).lower()
+        self.config.active_provider = active_provider
         if self.config.enabled and self._backend is None:
-            self._backend = self._load_backend(config.active_provider)
+            self._ensure_provider(self._active)
+            self._backend = self._load_backend(
+                active_provider,
+                storage_dir=self._storage_for(self._active),
+            )
+
+    def _ensure_provider(self, record: ArchitectureRecord) -> None:
+        """Make an evolved provider loadable before the adapter asks for it."""
+        provider_id = str(
+            record.configuration.get("provider", "")
+        ).strip().lower()
+        if not provider_id or provider_id in PROVIDERS:
+            return
+        module = record.configuration.get("module")
+        class_name = record.configuration.get("class_name")
+        implementation_root = record.configuration.get("implementation_root")
+        if not (module and class_name and implementation_root):
+            raise ValueError(
+                f"unknown memory provider {provider_id!r} and no generated "
+                "provider metadata is recorded for this architecture"
+            )
+        register_provider(
+            provider_id,
+            module=str(module),
+            class_name=str(class_name),
+            implementation_root=str(implementation_root),
+        )
+
+    def _provider_namespace(
+        self,
+        provider_id: str,
+        architecture_id: str | None = None,
+    ) -> Path:
+        """Architecture-level provider storage (workspace is appended later)."""
+        base = self.root / "providers" / provider_id
+        return base / architecture_id if architecture_id else base
+
+    def _workspace_storage(
+        self,
+        provider_id: str,
+        architecture_id: str | None = None,
+    ) -> Path:
+        """Per-workspace provider storage prevents cross-project leakage."""
+        return self._provider_namespace(provider_id, architecture_id) / self.workspace_key
+
+    def _storage_for(self, record: ArchitectureRecord) -> Path:
+        provider_id = str(
+            record.configuration.get("provider", self.config.active_provider)
+        ).lower()
+        base = (
+            Path(record.storage_namespace)
+            if record.storage_namespace
+            else self._provider_namespace(provider_id)
+        )
+        if base.name == self.workspace_key:
+            return base
+        return base / self.workspace_key
 
     def _load_updated_ids(self) -> set[str]:
         if not self._update_path.exists():
@@ -95,20 +158,23 @@ class MemoryManager:
         if provider_id not in PROVIDERS:
             raise ValueError(f"unknown provider {provider_id!r}")
         settings = self.config.provider_settings(provider_id)
-        if storage_dir is not None:
-            settings["storage_dir"] = str(Path(storage_dir))
-            if provider_id == "expel":
-                base = Path(settings["storage_dir"])
-                settings["insights_file_path"] = str(base / "insights.json")
-                settings["success_trajectories_file_path"] = str(
-                    base / "success_trajectories.json"
-                )
+        target = (
+            Path(storage_dir)
+            if storage_dir is not None
+            else self._workspace_storage(provider_id)
+        )
+        settings["storage_dir"] = str(target)
+        if provider_id == "expel":
+            settings["insights_file_path"] = str(target / "insights.json")
+            settings["success_trajectories_file_path"] = str(
+                target / "success_trajectories.json"
+            )
         if self._model is None:
             configured = settings.get("model")
             self._model = configured if callable(configured) else None
         return EvolveLabBackend(
             provider_id,
-            storage_dir=Path(settings["storage_dir"]),
+            storage_dir=target,
             config=settings,
             model=self._model,
         )
@@ -181,17 +247,20 @@ class MemoryManager:
         """Activate a validated architecture only after a backend is available."""
         with self._lock:
             record = self.registry.get(architecture_id)
-            if record.validation_status not in {"validated", "evaluated"}:
+            if (
+                record.validation_status not in {"validated", "evaluated"}
+                or record.state not in {"validated", "evaluated", "eligible"}
+            ):
                 raise ValueError(
                     "architecture has not been validated/evaluated"
                 )
             provider_id = str(
                 record.configuration.get("provider", self.config.active_provider)
             ).lower()
+            self._ensure_provider(record)
             new_backend = self._load_backend(
                 provider_id,
-                storage_dir=record.storage_namespace
-                or self.root / "providers" / provider_id,
+                storage_dir=self._storage_for(record),
             )
             old = self._backend
             self._backend = new_backend
@@ -203,6 +272,7 @@ class MemoryManager:
                 raise
             self.config.active_provider = provider_id
             self._active = activated
+            self.config.persist_selection()
             if old is not None:
                 old.close()
             return activated
@@ -210,16 +280,17 @@ class MemoryManager:
     def rollback_architecture(self) -> Any:
         """Restore the previous architecture and its isolated storage."""
         with self._lock:
-            previous = self.registry.get(self.registry.status()["previous"]) if self.registry.status()["previous"] else None
+            previous_id = self.registry.status()["previous"]
+            previous = self.registry.get(previous_id) if previous_id else None
             if previous is None:
                 return None
             provider_id = str(
                 previous.configuration.get("provider", self.config.active_provider)
             ).lower()
+            self._ensure_provider(previous)
             new_backend = self._load_backend(
                 provider_id,
-                storage_dir=previous.storage_namespace
-                or self.root / "providers" / provider_id,
+                storage_dir=self._storage_for(previous),
             )
             old = self._backend
             self._backend = new_backend
@@ -231,6 +302,7 @@ class MemoryManager:
                 raise
             self.config.active_provider = provider_id
             self._active = activated
+            self.config.persist_selection()
             if old is not None:
                 old.close()
             return activated
@@ -243,15 +315,23 @@ class MemoryManager:
         with self._lock:
             new_backend = self._load_backend(provider_id)
             old = self._backend
+            try:
+                activated = self.registry.switch_provider(
+                    provider_id,
+                    storage_namespace=str(
+                        self._provider_namespace(provider_id)
+                    ),
+                    upstream_commit=UPSTREAM_COMMIT,
+                )
+            except Exception:
+                new_backend.close()
+                raise
             self._backend = new_backend
             self.config.active_provider = provider_id
+            self._active = activated
+            self.config.persist_selection()
             if old is not None:
                 old.close()
-            self._active = self.registry.ensure_baseline(
-                provider_id,
-                storage_namespace=str(self.root / "providers" / provider_id),
-                upstream_commit=UPSTREAM_COMMIT,
-            )
 
     def health_check(self) -> dict[str, Any]:
         return {
@@ -284,9 +364,8 @@ class MemoryManager:
         source_architecture: str | None = None,
     ) -> Any:
         """Replay canonical history into a separate target namespace."""
-        target_settings = self.config.provider_settings(target_provider)
-        target_settings["storage_dir"] = str(
-            self.root / "providers" / target_provider / target_architecture
+        target_dir = self._workspace_storage(
+            target_provider, target_architecture
         )
         try:
             self.registry.get(target_architecture)
@@ -298,19 +377,18 @@ class MemoryManager:
                     parent_architecture=(
                         source_architecture or self._active.architecture_id
                     ),
-                    implementation_path=target_settings["storage_dir"],
-                    storage_namespace=target_settings["storage_dir"],
+                    implementation_path=str(target_dir),
+                    storage_namespace=str(
+                        self._provider_namespace(
+                            target_provider, target_architecture
+                        )
+                    ),
                     configuration={"provider": target_provider},
                     validation_status="not_validated",
                     state="created",
                 )
             )
-        backend = EvolveLabBackend(
-            target_provider,
-            storage_dir=Path(target_settings["storage_dir"]),
-            config=target_settings,
-            model=self._model,
-        )
+        backend = self._load_backend(target_provider, storage_dir=target_dir)
         try:
             result = ReplayManager(self.store, self.registry).replay(
                 source_architecture=(
@@ -318,6 +396,9 @@ class MemoryManager:
                 ),
                 target_architecture=target_architecture,
                 target_backend=backend,
+                validate=lambda target, records: bool(
+                    target.health_check().get("ok")
+                ),
             )
             if result.validation_status == "validated":
                 try:

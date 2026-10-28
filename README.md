@@ -230,7 +230,13 @@ uv run python main.py memory rollback
 uv run python main.py memory evolve --from-canonical --work-dir .irina/evolution
 uv run python main.py -p "Fix the failing test" --mode yolo --memory
 uv run python main.py -p "Fix the failing test" --mode yolo --memory --memory-provider expel
+uv run python main.py -p "Fix the failing test" --mode yolo --memory --verbose
 ```
+
+Routine memory/provider logs stay hidden by default. `--verbose` shows them
+with Irina's level colors (cyan INFO, dim DEBUG, green success, yellow
+warning, red error) and respects `--no-color`/`--plain`; errors remain visible
+in both modes.
 
 Canonical experiences live under `~/.irina/memory` by default, and provider
 storage is scoped per workspace. Install the optional sets with

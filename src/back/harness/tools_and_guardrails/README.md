@@ -82,11 +82,19 @@ Python. Docker must be able to see that image.
 
 - **Filesystem:** the workspace is read-write; system libraries are read-only;
   `/var`, `/home`, and `/etc/passwd` are unavailable; `/tmp` is writable.
+  TeX configuration and font metadata (`/etc/texmf`, `/etc/fonts`,
+  `/var/lib/texmf`) are read-only when a document image is used.
 - **Network:** no rules, so all outbound connections are denied.
 - **Process:** UID/GID 1000, non-root, with Landlock set to
   `hard_requirement`.
 - **Credentials:** no provider is attached and `DEEPSEEK_API_KEY` is never passed
   into the sandbox.
+
+Approved images can add language or document tools without changing the policy.
+Use `--sandbox-image` and keep the image pinned and reviewed; the image is part
+of the trusted supply chain. See
+[images/application](../../../../images/application/README.md) for TeX, Poppler,
+and pypdf.
 
 The integration tests run commands inside a real sandbox to check these layers.
 They skip if OpenShell is unavailable.

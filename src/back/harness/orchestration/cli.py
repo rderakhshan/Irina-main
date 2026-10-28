@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
 
@@ -51,10 +52,75 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run one task without entering the interactive prompt loop.",
     )
     parser.add_argument(
+        "--prompt-file",
+        default=None,
+        metavar="PATH",
+        help="Read the task from a host UTF-8 file (headless).",
+    )
+    parser.add_argument(
         "-d",
         "--workdir",
         default=".",
         help="Approved project workspace (default: current directory).",
+    )
+    parser.add_argument(
+        "--skills-dir",
+        default="skills",
+        help=(
+            "Host directory of skills/<name>/SKILL.md to upload into the "
+            "sandbox at startup (default: ./skills). Pass an empty string to "
+            "disable."
+        ),
+    )
+    parser.add_argument(
+        "--input",
+        dest="inputs",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Host file or directory to upload into input/ before the run.",
+    )
+    parser.add_argument(
+        "--export",
+        dest="export_paths",
+        action="append",
+        default=[],
+        metavar="SANDBOX_PATH",
+        help="Workspace path to download on clean shutdown.",
+    )
+    parser.add_argument(
+        "--artifacts-dir",
+        default=None,
+        metavar="PATH",
+        help="Host directory that receives --export paths.",
+    )
+    parser.add_argument(
+        "--export-contents",
+        action="store_true",
+        help=(
+            "Merge exported directory contents into --artifacts-dir instead "
+            "of creating a subdirectory."
+        ),
+    )
+    parser.add_argument(
+        "--force",
+        dest="force_export",
+        action="store_true",
+        help="Replace an existing exported artifact.",
+    )
+    parser.add_argument(
+        "--auto-export",
+        action="store_true",
+        help="Export configured artifact paths after each completed run.",
+    )
+    parser.add_argument(
+        "--sandbox-image",
+        default=None,
+        metavar="IMAGE",
+        help=(
+            "Approved OpenShell image, e.g. irina/application-tex:1. "
+            "Defaults to the built-in image."
+        ),
     )
     parser.add_argument(
         "-m",
@@ -307,7 +373,43 @@ def build_harness(
         on_event=on_event,
         max_turns=args.max_turns,
         stream=getattr(args, "stream", False),
+        skills_dir=getattr(args, "skills_dir", None),
+        inputs=getattr(args, "inputs", None),
+        export_paths=getattr(args, "export_paths", None),
+        artifacts_dir=getattr(args, "artifacts_dir", None),
+        export_contents=getattr(args, "export_contents", False),
+        force_export=getattr(args, "force_export", False),
+        sandbox_image=getattr(args, "sandbox_image", None),
     )
+
+
+def _auto_export(harness: Any) -> None:
+    """Export artifacts after a run when --auto-export is enabled."""
+    if not getattr(harness, "_artifacts_dir", None) or not getattr(
+        harness, "_export_paths", None
+    ):
+        return
+    try:
+        paths = harness.export_now(
+            force=getattr(harness, "_force_export", False)
+        )
+    except FileExistsError:
+        return
+    except Exception as exc:
+        print(f"artifact export failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return
+    for path in paths:
+        print(f"artifact={path}", file=sys.stderr)
+    harness._transfers_reported = True
+
+
+def _report_transfers(harness: Any) -> None:
+    """Print exported artifacts and nonfatal export failures."""
+    if not getattr(harness, "_transfers_reported", False):
+        for path in getattr(harness, "exported_artifacts", []) or []:
+            print(f"artifact={path}", file=sys.stderr)
+    for error in getattr(harness, "export_errors", []) or []:
+        print(f"artifact export failed: {error}", file=sys.stderr)
 
 
 def _print_result(result: RunResult, stream: TextIO | None = None) -> None:
@@ -341,6 +443,48 @@ def _try_resume(harness: Harness, args: argparse.Namespace) -> None:
         print("No resumable session was found; starting a new session.")
 
 
+def _truthy(value: str | None) -> bool:
+    return str(value or "").lower() in {"1", "true", "yes", "on"}
+
+
+def _env_paths(name: str, *, optional: bool = False) -> list[str]:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return []
+    paths = [part.strip() for part in raw.split(os.pathsep) if part.strip()]
+    if optional:
+        return [path for path in paths if Path(path).expanduser().exists()]
+    return paths
+
+
+def _apply_env_defaults(args: argparse.Namespace) -> None:
+    """Apply IRINA_* defaults for a flag-free ``uv run main.py`` session."""
+    required = os.environ.get("IRINA_DEFAULTS_REQUIRE", "").strip()
+    if required and not Path(required).expanduser().exists():
+        return
+    if not args.sandbox_image:
+        args.sandbox_image = os.environ.get("IRINA_SANDBOX_IMAGE") or None
+    if args.skills_dir == "skills":
+        args.skills_dir = os.environ.get("IRINA_SKILLS_DIR", args.skills_dir)
+    if not args.inputs:
+        args.inputs = _env_paths("IRINA_INPUTS") + _env_paths(
+            "IRINA_OPTIONAL_INPUTS", optional=True
+        )
+    if not args.export_paths:
+        args.export_paths = _env_paths("IRINA_EXPORT_PATHS")
+    if not args.artifacts_dir:
+        args.artifacts_dir = os.environ.get("IRINA_ARTIFACTS_DIR") or None
+    if not args.export_contents:
+        args.export_contents = _truthy(os.environ.get("IRINA_EXPORT_CONTENTS"))
+    if not args.force_export:
+        args.force_export = _truthy(os.environ.get("IRINA_FORCE_EXPORT"))
+    if not args.auto_export:
+        args.auto_export = _truthy(os.environ.get("IRINA_AUTO_EXPORT"))
+    mode = os.environ.get("IRINA_MODE", "").strip().lower()
+    if args.mode == "safe" and mode in {"safe", "yolo", "read-only"}:
+        args.mode = mode
+
+
 def _run_headless(
     harness: Harness,
     prompt: str,
@@ -368,6 +512,8 @@ def _run_headless(
         renderer.error(f"Irina failed: {type(exc).__name__}: {exc}")
         return 1
 
+    if getattr(args, "auto_export", False):
+        _auto_export(harness)
     if harness.session_path is not None:
         print(f"session={harness.session_path}")
     if not result.completed:
@@ -382,7 +528,169 @@ def _run_headless(
     except Exception as exc:
         renderer.error(f"Cleanup failed: {type(exc).__name__}: {exc}")
         return 1
+    _report_transfers(harness)
     return 0
+
+
+MAX_PROMPT_CHARS = 200_000
+_BRACKETED_PASTE_START = "\x1b[200~"
+_BRACKETED_PASTE_END = "\x1b[201~"
+PASTE_TERMINATORS = {'"""', "/end"}
+
+
+def _read_console_line(prompt: str) -> str:
+    """Read one console entry, collecting a multi-line paste as one task."""
+    try:
+        if (
+            os.name != "nt"
+            or not sys.stdin.isatty()
+            or not sys.stdout.isatty()
+        ):
+            return input(prompt)
+    except (AttributeError, OSError):
+        return input(prompt)
+    import msvcrt
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    chars: list[str] = []
+    last = time.monotonic()
+    while True:
+        try:
+            ready = msvcrt.kbhit()
+        except (OSError, ValueError):
+            return input(prompt)
+        if ready:
+            try:
+                char = msvcrt.getwch()
+            except (OSError, ValueError):
+                return input(prompt)
+            if char in {"\x00", "\xe0"}:
+                if msvcrt.kbhit():
+                    msvcrt.getwch()
+                continue
+            if char == "\x03":
+                raise KeyboardInterrupt
+            if char in {"\r", "\n"}:
+                chars.append("\n")
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                last = time.monotonic()
+                continue
+            if char == "\x08":
+                if chars and chars[-1] != "\n":
+                    chars.pop()
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                continue
+            chars.append(char)
+            sys.stdout.write(char)
+            sys.stdout.flush()
+            last = time.monotonic()
+            continue
+        if chars and chars[-1] == "\n":
+            if time.monotonic() - last > 0.15:
+                break
+        time.sleep(0.01)
+    return "".join(chars).strip("\n")
+
+
+def _clean_paste(text: str) -> str:
+    return (
+        text.replace(_BRACKETED_PASTE_START, "")
+        .replace(_BRACKETED_PASTE_END, "")
+        .strip()
+    )
+
+
+def _drain_windows_paste(initial: str) -> str:
+    """Collect remaining console lines pasted after the first line.
+
+    Windows terminals deliver a multi-line paste as buffered key events. Input
+    is read until the buffer is idle for a short interval; a normally typed
+    single line has nothing buffered and is returned unchanged.
+    """
+    if os.name != "nt":
+        return initial
+    try:
+        import msvcrt
+    except ImportError:
+        return initial
+    chunks = [initial]
+    current = ""
+    last = time.monotonic()
+    while True:
+        try:
+            ready = msvcrt.kbhit()
+        except (OSError, ValueError):
+            break
+        if ready:
+            try:
+                char = msvcrt.getwch()
+            except (OSError, ValueError):
+                break
+            if char in {"\x00", "\xe0"}:
+                if msvcrt.kbhit():
+                    msvcrt.getwch()
+                continue
+            if char in {"\r", "\n"}:
+                if current:
+                    chunks.append(current)
+                    current = ""
+                last = time.monotonic()
+                continue
+            current += char
+            last = time.monotonic()
+            continue
+        if time.monotonic() - last > 0.08:
+            break
+        time.sleep(0.005)
+    if current:
+        chunks.append(current)
+    return "\n".join(chunks)
+
+
+def _capture_prompt(line: str) -> str:
+    """Turn one console line plus any buffered paste into a task string."""
+    text = _clean_paste(line)
+    if text.lower() in {"exit", "quit"} or text.lower().startswith(("/file ", "/export")):
+        return text
+    if text.lower() == "/paste":
+        return "/paste"
+    return _clean_paste(_drain_windows_paste(line))
+
+
+def _read_multiline(
+    read_line: Callable[[str], str] = _read_console_line,
+) -> str:
+    """Read a pasted multi-line task until a terminator line."""
+    lines: list[str] = []
+    while True:
+        try:
+            line = read_line("... ")
+        except (EOFError, KeyboardInterrupt):
+            return ""
+        if line.strip() in PASTE_TERMINATORS:
+            break
+        lines.append(line)
+    text = "\n".join(lines).strip()
+    return text if len(text) <= MAX_PROMPT_CHARS else ""
+
+
+def _task_from_file(path: str) -> str:
+    """Read a host file explicitly named with /file."""
+    raw = path.strip().strip('"').strip("'")
+    try:
+        text = Path(raw).expanduser().read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError as exc:
+        raise ValueError(f"cannot read {raw}: {exc}") from None
+    if len(text) > MAX_PROMPT_CHARS:
+        raise ValueError(
+            f"prompt file is larger than {MAX_PROMPT_CHARS} characters"
+        )
+    return text.strip()
 
 
 def _run_interactive(
@@ -403,7 +711,10 @@ def _run_interactive(
             mode=harness.policy.mode,
             session=str(harness.session_path) if harness.session_path else None,
         )
-        renderer.info("Type a task, or 'exit' to quit.")
+        renderer.info(
+            "Type a task, /paste for multi-line text, /file <path>, "
+            "/export, or 'exit'."
+        )
         args._irina_banner = True
 
     prompt_count = 0
@@ -411,18 +722,51 @@ def _run_interactive(
     try:
         while True:
             try:
-                line = input(renderer.prompt())
+                line = _read_console_line(renderer.prompt())
             except EOFError:
                 print("\nBye.")
                 break
             except KeyboardInterrupt:
                 print("\nBye.")
                 break
-            task = line.strip()
+            task = _capture_prompt(line)
             if not task:
                 continue
             if task.lower() in {"exit", "quit"}:
                 break
+            if task.lower() in {"/export", "/export force"}:
+                force = task.lower().endswith(" force")
+                try:
+                    paths = harness.export_now(force=force)
+                except Exception as exc:
+                    renderer.error(
+                        f"Export failed: {type(exc).__name__}: {exc}"
+                    )
+                    continue
+                if not paths:
+                    renderer.info("No artifacts to export yet.")
+                    continue
+                for path in paths:
+                    print(f"artifact={path}")
+                harness._transfers_reported = True
+                continue
+            if task.lower() == "/paste":
+                renderer.info('Paste text, then a line containing only """')
+                task = _read_multiline()
+                if not task:
+                    renderer.info("No pasted text loaded.")
+                    continue
+                renderer.info(f"Loaded {len(task)} characters.")
+            elif task.lower().startswith("/file "):
+                try:
+                    task = _task_from_file(task[6:])
+                except ValueError as exc:
+                    renderer.error(str(exc))
+                    continue
+                if not task:
+                    renderer.info("Prompt file is empty.")
+                    continue
+                renderer.info(f"Loaded {len(task)} characters from file.")
 
             renderer.begin_run()
             try:
@@ -450,6 +794,8 @@ def _run_interactive(
                 normal_exit = False
                 return 1
 
+            if getattr(args, "auto_export", False):
+                _auto_export(harness)
             prompt_count += 1
             if not result.completed:
                 renderer.info(
@@ -465,6 +811,8 @@ def _run_interactive(
                 renderer.error(
                     f"Cleanup failed: {type(exc).__name__}: {exc}"
                 )
+            else:
+                _report_transfers(harness)
     return 0
 
 
@@ -475,8 +823,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.max_turns <= 0:
         parser.error("--max-turns must be positive")
+    if args.export_paths and not args.artifacts_dir:
+        parser.error("--artifacts-dir is required with --export")
 
     _load_dotenv()
+    _apply_env_defaults(args)
+    if args.prompt_file:
+        if args.prompt is not None:
+            parser.error("--prompt-file cannot be combined with --prompt")
+        try:
+            args.prompt = _task_from_file(args.prompt_file)
+        except ValueError as exc:
+            parser.error(str(exc))
     interactive = args.prompt is None
     is_tty = False
     try:
@@ -581,7 +939,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 str(harness.session_path) if harness.session_path else None
             ),
         )
-        renderer.info("Type a task, or 'exit' to quit.")
+        renderer.info(
+            "Type a task, /paste for multi-line text, /file <path>, "
+            "/export, or 'exit'."
+        )
         args._irina_banner = True
         return _run_interactive(harness, args)
     finally:

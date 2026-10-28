@@ -139,6 +139,9 @@ model, and troubleshooting.
 - Dynamic loading of an approved generated provider from its recorded build tree.
 - Quiet memory logging by default; `--verbose` adds theme-colored diagnostics
   while keeping errors visible.
+- Complete skill-directory seeding (`SKILL.md`, assets, scripts), explicit
+  `--input` upload and `--export` artifact download, and an approved
+  TeX/Poppler/pypdf image for document skills.
 - Original Lightweight Memory and ExpeL provider integration; optional research
   dependencies remain isolated from ordinary Irina execution.
 - A parallel fleet runner with isolated workspaces, ordered results, per-job
@@ -158,7 +161,7 @@ also passed. Stage 4 produced `taskman/`, `artisan-coffee/`, and `viper/` throug
 real DeepSeek + OpenShell runs. `taskman` completed both build and review with 19
 tests passing. The two web projects met their mechanical checks, but their runs
 ended at `token_budget` before a completed review; browser interaction was not
-automated. The current offline suite is **295 tests, OK (2 skipped)**, including
+automated. The current offline suite is **316 tests, OK (2 skipped)**, including
 the memory integration, finalization, and logging suites.
 
 Memory finalization checks:
@@ -238,7 +241,38 @@ python main.py -p "Explain the test failure" --no-stream
 python main.py -p "Explain the test failure" --plain
 python main.py --memory                # enable learned experience
 python main.py --memory --verbose      # show colored memory diagnostics
+python main.py --skills-dir .\skills   # upload host skills before the first prompt
+python main.py --prompt-file job.txt   # headless task from a host file
 ```
+
+For long or multi-line text, paste it directly. Irina collects the buffered
+paste lines into one task. If a terminal splits the paste, use the explicit
+`/paste` mode:
+
+```text
+/paste
+<paste the job description>
+"""
+```
+
+or load a host file:
+
+```text
+/file D:\Application\job_description.txt
+```
+
+`/paste` reads until a line containing only `"""` or `/end`. `/file` reads a
+UTF-8 host file (up to 200,000 characters) as the task. `--prompt-file` does the
+same for a headless run.
+
+When the first line is `Use the application skill` and the pasted text contains
+a complete JD, the skill runs its automatic mode: it drafts, finalizes, and
+reports without a review loop. `IRINA_AUTO_EXPORT=1` saves the folder to the
+host after the run.
+
+Use `/export` to save configured artifacts immediately after they are created,
+without waiting for exit. `/export force` replaces an existing host folder.
+`--auto-export` does this automatically after each completed run.
 
 Streaming is on by default. `--no-stream` uses the original completion path;
 `--plain` disables color, animation, and Unicode fallbacks. `safe` is the
@@ -255,12 +289,71 @@ Memory flags:
 | `--memory` | Enable canonical experience + the configured EvolveLab provider |
 | `--no-memory` | Disable memory even when configuration enables it |
 | `--memory-provider <id>` | Select an upstream provider explicitly |
+| `--skills-dir <path>` | Upload complete skill directories (`SKILL.md`, assets, scripts) at startup (default `./skills`; empty string disables) |
+| `--input <host path>` | Upload a file or directory into `input/` before the run |
+| `--export <sandbox path>` | Download a workspace path on clean shutdown |
+| `--artifacts-dir <host path>` | Host destination for `--export` (required with `--export`) |
+| `--export-contents` | Merge an exported directory's contents into `--artifacts-dir` (e.g. `D:\Application\<Company>`) |
+| `--auto-export` | Export configured artifacts after each completed run |
+| `--force` | Replace an existing exported artifact |
+| `--sandbox-image <image>` | Use an approved OpenShell image, e.g. `irina/application-tex:1` |
 | `--verbose` | Show routine memory logs with level colors |
 | `--no-color` / `--plain` | Keep verbose logs readable without ANSI |
 
 Default memory logging is intentionally silent. `--verbose` reports
 initialization, retrieval, ingestion, and persistence; errors stay visible in
 both modes.
+
+Skills are host directories at `skills/<name>/` with a `SKILL.md` plus optional
+assets and scripts. On first run Irina creates `./skills` with a README and
+uploads complete valid skill directories into the sandbox before building the
+system prompt (`--skills-dir`, default `./skills`). The agent sees a compact
+catalog and calls `use_skill(name)` only when relevant. Invalid names, symlinks,
+empty or oversized files are skipped; skills are instructions only and cannot
+grant permissions.
+
+Files explicitly selected by the user can be uploaded into `input/` (a file
+lands at `input/<filename>`, a directory under `input/<dirname>/`); declared
+workspace paths can be exported before cleanup:
+
+```powershell
+uv run python main.py `
+  --skills-dir .\skills `
+  --input .\input-cv\resume.tex `
+  --export application `
+  --export-contents `
+  --artifacts-dir "D:\Application" `
+  --mode yolo -p "Prepare an application for this job description"
+```
+
+With `--export-contents`, the sandbox folder `application/<Company>/` lands
+directly as `D:\Application\<Company>\`. Without it, the export creates
+`D:\Application\application\<Company>\`. Existing company folders are
+refused unless `--force` is passed.
+
+The included `application` skill needs an image with TeX Live, Poppler, and
+pypdf:
+
+```powershell
+wsl docker build -t irina/application-tex:1 .\images\application
+uv run python main.py --sandbox-image irina/application-tex:1 ...
+```
+
+See [images/application](images/application/README.md) and the
+[application skill](skills/application/SKILL.md).
+
+Skills created or edited by Irina during a run are captured as drafts on a
+clean shutdown, not promoted automatically:
+
+```powershell
+uv run python main.py skills list
+uv run python main.py skills promote <name>
+uv run python main.py skills discard <name>
+```
+
+Drafts live under `<state>/skill-drafts/<workspace-key>/`. Review before
+promoting; one bad run should not be able to rewrite the instructions for every
+later run.
 
 For the live check, add your key to the ignored `.env` file:
 
@@ -401,6 +494,92 @@ Storage at a glance:
 └── migrations/<target>.json                      # replay evidence
 ```
 
+## Flag-free application profile
+
+Put machine-specific defaults in the ignored `.env` file once:
+
+```dotenv
+IRINA_SANDBOX_IMAGE=irina/application-tex:1
+IRINA_SKILLS_DIR=skills
+IRINA_INPUTS=D:\Application\input\resume.tex
+IRINA_OPTIONAL_INPUTS=D:\Application\reference.pdf;D:\Application\examples
+IRINA_EXPORT_PATHS=application
+IRINA_EXPORT_CONTENTS=1
+IRINA_ARTIFACTS_DIR=D:\Application
+IRINA_AUTO_EXPORT=1
+IRINA_MODE=safe
+IRINA_DEFAULTS_REQUIRE=D:\Application\input\resume.tex
+```
+
+Then start with no application flags:
+
+```powershell
+uv run python main.py
+```
+
+At the prompt use `/paste` for the JD. Configured artifacts are exported after
+each completed run (`IRINA_AUTO_EXPORT=1`) and again on clean exit. Explicit CLI
+flags override these defaults. Missing optional inputs are skipped; a missing
+required input fails before the run with its exact path.
+`IRINA_DEFAULTS_REQUIRE` disables the whole block when the CV is absent, so a
+normal Irina session starts instead.
+
+## Add your own skill
+
+A skill is a directory under `skills/` with a `SKILL.md` and optional assets or
+scripts:
+
+```text
+skills/
+??? release-notes/
+    ??? SKILL.md
+    ??? assets/
+        ??? template.md
+```
+
+Create it once:
+
+```markdown
+---
+name: release-notes
+description: Write concise release notes from git history.
+---
+
+# Release Notes
+
+When asked for release notes:
+1. Read commits since the last tag.
+2. Group by feature, fix, and breaking change.
+3. Keep each bullet under 120 characters.
+```
+
+Rules:
+
+- the directory name is the skill id;
+- `description` is what appears in the system prompt catalog;
+- the full `SKILL.md` loads only when the agent calls `use_skill(name)`;
+- assets and scripts in the same directory are uploaded too;
+- skills are lower-trust instructions and cannot grant permissions.
+
+On the next start:
+
+```powershell
+uv run python main.py
+```
+
+Irina uploads the complete directory into OpenShell before building the system
+prompt. The agent sees the skill in its catalog and can load it with
+`use_skill`. A skill created by Irina during a run goes to the drafts directory
+instead; review it with:
+
+```powershell
+uv run python main.py skills list
+uv run python main.py skills promote <name>
+```
+
+Use `--skills-dir <path>` for a different host directory, or
+`--skills-dir ""` to disable loading.
+
 ## Layout
 
 ```
@@ -424,6 +603,8 @@ src/back/harness/context_management/memory/
                                     and vendored MemEvolve source
 src/back/harness/context_management/
                                     Compaction, memory, skills, task state
+skills/                             Host skill packs uploaded into the sandbox
+images/application/                 Approved TeX/Poppler/pypdf sandbox image
 demos/                              Runnable examples and live checks
 tests/                              Unit tests and OpenShell integration tests
 src/back/datasets/                  Dataset code (later)

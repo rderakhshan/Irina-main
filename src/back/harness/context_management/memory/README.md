@@ -394,7 +394,7 @@ uv run python -m unittest tests.test_memory_logging -v       # default silence, 
 uv run python -m unittest discover -s tests                  # full suite
 ```
 
-Full suite at the time of writing: **295 tests, OK (2 skipped)**.
+Full suite at the time of writing: **316 tests, OK (2 skipped)**.
 
 ## Where to look
 

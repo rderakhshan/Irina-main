@@ -18,6 +18,7 @@ from __future__ import annotations
 import inspect
 import json
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -200,6 +201,38 @@ class LocalWorkspace:
         return self._request(
             "list_files", pattern=pattern, limit=limit
         )
+
+    def _resolve_local(self, path: str | Path) -> Path:
+        root = Path(self.workspace).resolve()
+        target = (root / str(path)).resolve()
+        if target != root and root not in target.parents:
+            raise ValueError(f"path escapes the workspace: {path!r}")
+        return target
+
+    def upload_file(self, source: str | Path, path: str) -> dict[str, Any]:
+        """Copy one host file into the local workspace (tests/development)."""
+        source_path = Path(source).expanduser().resolve()
+        target = self._resolve_local(path)
+        if source_path.is_dir():
+            raise IsADirectoryError(f"source is a directory: {source_path}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, target)
+        return {"path": str(target), "bytes": target.stat().st_size}
+
+    def download(self, sandbox_path: str | Path, destination: str | Path) -> Path:
+        """Copy one workspace file or directory to the host."""
+        source = self._resolve_local(sandbox_path)
+        target = Path(destination).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(source, target)
+        else:
+            shutil.copyfile(source, target)
+        return target
+
+    download_file = download
 
     def grep(
         self, regex: str, pattern: str = "*", *, limit: int = MAX_GREP_MATCHES

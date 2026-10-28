@@ -7,15 +7,25 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from src.back.harness import Harness
+from src.back.harness.orchestration.cli import build_parser
 from src.back.harness.providers.base import ToolCall
 from src.back.harness.context_management.skills import (
     SKILLS_DIR,
     catalog,
     catalog_prompt,
+    discard_skill_draft,
+    draft_root,
+    ensure_host_skills_dir,
+    list_skill_drafts,
+    promote_skill_draft,
     read_skill,
+    seed_skills,
     skill_tools,
+    sync_skill_drafts,
 )
 from src.back.harness.tools_and_guardrails import LocalWorkspace, Policy
+from src.back.harness.tools_and_guardrails.transfers import export_artifacts
 
 
 class SkillTests(unittest.TestCase):
@@ -175,6 +185,404 @@ class SkillTests(unittest.TestCase):
         entries = catalog(str(self.root), workspace=self.workspace)
         self.assertIn("plain", entries)
         self.assertEqual(entries["plain"]["description"], "A plain body.")
+
+
+class SeedSkillsTests(unittest.TestCase):
+    def test_seed_uploads_only_valid_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            host = root / "host-skills"
+            workspace_root = root / "workspace"
+            workspace_root.mkdir()
+            valid = host / "brand-voice"
+            valid.mkdir(parents=True)
+            (valid / "SKILL.md").write_text(
+                "---\ndescription: Friendly voice.\n---\n\nUse short sentences.\n",
+                encoding="utf-8",
+            )
+            invalid = host / "bad name"
+            invalid.mkdir()
+            (invalid / "SKILL.md").write_text("ignored\n", encoding="utf-8")
+            empty = host / "empty"
+            empty.mkdir()
+            (empty / "SKILL.md").write_text("", encoding="utf-8")
+            oversized = host / "oversized"
+            oversized.mkdir()
+            (oversized / "SKILL.md").write_text(
+                "x" * 200_001, encoding="utf-8"
+            )
+            no_file = host / "no-file"
+            no_file.mkdir()
+
+            workspace = LocalWorkspace(workspace_root)
+            installed = seed_skills(str(host), str(workspace_root), workspace=workspace)
+            self.assertEqual(installed, ["brand-voice"])
+            entries = catalog(str(workspace_root), workspace=workspace)
+            self.assertIn("brand-voice", entries)
+            self.assertNotIn("bad name", entries)
+            self.assertIn(
+                "Use short sentences.",
+                read_skill(str(workspace_root), "brand-voice", workspace=workspace),
+            )
+
+    def test_seed_uploads_scripts_and_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            host = root / "skills"
+            skill = host / "with-assets"
+            (skill / "assets").mkdir(parents=True)
+            (skill / "scripts").mkdir(parents=True)
+            (skill / "SKILL.md").write_text(
+                "---\n"
+                "description: Asset skill.\n"
+                "---\n"
+                "\n"
+                "Use assets.\n",
+                encoding="utf-8",
+            )
+            (skill / "assets" / "template.tex").write_text(
+                "TEMPLATE\n", encoding="utf-8"
+            )
+            (skill / "scripts" / "run.py").write_text(
+                "print('run')\n", encoding="utf-8"
+            )
+            workspace_root = root / "workspace"
+            workspace_root.mkdir()
+            workspace = LocalWorkspace(workspace_root)
+            installed = seed_skills(
+                str(host), str(workspace_root), workspace=workspace
+            )
+            self.assertEqual(installed, ["with-assets"])
+            self.assertIn(
+                "TEMPLATE",
+                workspace.read_file("skills/with-assets/assets/template.tex")[
+                    "text"
+                ],
+            )
+            self.assertIn(
+                "print",
+                workspace.read_file("skills/with-assets/scripts/run.py")["text"],
+            )
+
+    def test_seed_is_repeatable_and_missing_host_is_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = LocalWorkspace(root)
+            self.assertEqual(
+                seed_skills(str(root / "missing"), str(root), workspace=workspace),
+                [],
+            )
+            host = root / "host"
+            skill = host / "one"
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text("first\n", encoding="utf-8")
+            self.assertEqual(
+                seed_skills(str(host), str(root), workspace=workspace), ["one"]
+            )
+            self.assertEqual(
+                seed_skills(str(host), str(root), workspace=workspace), ["one"]
+            )
+            self.assertEqual(len(catalog(str(root), workspace=workspace)), 1)
+
+    def test_harness_seeds_before_building_the_prompt(self) -> None:
+        class Provider:
+            default_model = "fake-model"
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            host = root / "host-skills"
+            skill = host / "release-notes"
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(
+                "---\ndescription: Write release notes.\n---\n\nGroup by change type.\n",
+                encoding="utf-8",
+            )
+            workspace_root = root / "workspace"
+            workspace_root.mkdir()
+            harness = Harness(
+                workdir=workspace_root,
+                provider=Provider(),
+                policy=Policy("yolo"),
+                workspace_backend=LocalWorkspace(workspace_root),
+                persist=False,
+                skills_dir=host,
+            )
+            prompt = harness.system_prompt
+            self.assertIn("release-notes", prompt)
+            self.assertEqual(harness.seeded_skills, ["release-notes"])
+            harness.close()
+
+    def test_cli_exposes_skills_dir(self) -> None:
+        parser = build_parser()
+        self.assertEqual(parser.parse_args(["--memory"]).skills_dir, "skills")
+        self.assertEqual(
+            parser.parse_args(["--skills-dir", "custom"]).skills_dir, "custom"
+        )
+        self.assertEqual(parser.parse_args(["--skills-dir", ""]).skills_dir, "")
+        transfer = parser.parse_args(
+            [
+                "--input", "cv",
+                "--export", "application",
+                "--artifacts-dir", "out",
+                "--sandbox-image", "irina/application-tex:1",
+            ]
+        )
+        self.assertEqual(transfer.inputs, ["cv"])
+        self.assertEqual(transfer.export_paths, ["application"])
+        self.assertEqual(transfer.artifacts_dir, "out")
+        self.assertEqual(transfer.sandbox_image, "irina/application-tex:1")
+
+
+class SkillDraftTests(unittest.TestCase):
+    def test_host_skills_directory_is_created_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            host = Path(temp) / "skills"
+            created = ensure_host_skills_dir(host)
+            self.assertIsNotNone(created)
+            self.assertTrue((host / "README.md").is_file())
+            self.assertTrue((host / ".gitkeep").is_file())
+            first = (host / "README.md").read_text(encoding="utf-8")
+            ensure_host_skills_dir(host)
+            self.assertEqual(
+                (host / "README.md").read_text(encoding="utf-8"), first
+            )
+
+    def test_sync_captures_new_and_modified_but_not_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            host = root / "skills"
+            workspace_root = root / "workspace"
+            workspace_root.mkdir()
+            state = root / "state"
+            for name, body in (
+                ("stable", "stable body\n"),
+                ("edited", "trusted body\n"),
+            ):
+                skill = host / name
+                skill.mkdir(parents=True)
+                (skill / "SKILL.md").write_text(body, encoding="utf-8")
+            workspace = LocalWorkspace(workspace_root)
+            seed_skills(str(host), str(workspace_root), workspace=workspace)
+            workspace.write_file(
+                "skills/edited/SKILL.md", "agent changed this\n"
+            )
+            workspace.write_file("skills/created/SKILL.md", "new skill\n")
+
+            captured = sync_skill_drafts(
+                host, str(workspace_root), workspace=workspace, state_dir=state
+            )
+            self.assertEqual(captured, ["created", "edited"])
+            drafts = list_skill_drafts(str(workspace_root), state_dir=state)
+            self.assertEqual(sorted(drafts), ["created", "edited"])
+            self.assertNotIn("stable", drafts)
+            self.assertFalse((host / "created" / "SKILL.md").exists())
+            self.assertEqual(
+                sync_skill_drafts(
+                    host, str(workspace_root), workspace=workspace, state_dir=state
+                ),
+                [],
+            )
+
+    def test_promote_and_discard_drafts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            host = root / "skills"
+            workspace_root = root / "workspace"
+            workspace_root.mkdir()
+            state = root / "state"
+            workspace = LocalWorkspace(workspace_root)
+            workspace.write_file("skills/promoted/SKILL.md", "promote me\n")
+            sync_skill_drafts(
+                host, str(workspace_root), workspace=workspace, state_dir=state
+            )
+            target = promote_skill_draft(
+                "promoted",
+                host_dir=host,
+                workdir=str(workspace_root),
+                state_dir=state,
+            )
+            self.assertEqual(target.read_text(encoding="utf-8"), "promote me\n")
+            self.assertFalse(
+                (draft_root(str(workspace_root), state_dir=state) / "promoted").exists()
+            )
+            workspace.write_file("skills/promoted/SKILL.md", "changed\n")
+            sync_skill_drafts(
+                host, str(workspace_root), workspace=workspace, state_dir=state
+            )
+            with self.assertRaises(FileExistsError):
+                promote_skill_draft(
+                    "promoted",
+                    host_dir=host,
+                    workdir=str(workspace_root),
+                    state_dir=state,
+                )
+            promote_skill_draft(
+                "promoted",
+                host_dir=host,
+                workdir=str(workspace_root),
+                state_dir=state,
+                force=True,
+            )
+            self.assertEqual(target.read_text(encoding="utf-8"), "changed\n")
+
+            workspace.write_file("skills/discard-me/SKILL.md", "delete\n")
+            sync_skill_drafts(
+                host, str(workspace_root), workspace=workspace, state_dir=state
+            )
+            self.assertTrue(
+                discard_skill_draft(
+                    "discard-me", workdir=str(workspace_root), state_dir=state
+                )
+            )
+            self.assertFalse(
+                discard_skill_draft(
+                    "discard-me", workdir=str(workspace_root), state_dir=state
+                )
+            )
+
+    def test_harness_creates_and_syncs_skills_on_close(self) -> None:
+        class Provider:
+            default_model = "fake-model"
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            host = root / "skills"
+            host_skill = host / "host-skill"
+            host_skill.mkdir(parents=True)
+            (host_skill / "SKILL.md").write_text(
+                "---\ndescription: A host skill.\n---\n\nHost instructions.\n",
+                encoding="utf-8",
+            )
+            workspace_root = root / "workspace"
+            workspace_root.mkdir()
+            harness = Harness(
+                workdir=workspace_root,
+                provider=Provider(),
+                policy=Policy("yolo"),
+                workspace_backend=LocalWorkspace(workspace_root),
+                persist=False,
+                skills_dir=host,
+                state_dir=root / "state",
+            )
+            self.assertIn("Skills", harness.system_prompt)
+            self.assertTrue((host / "README.md").is_file())
+            harness._backend.write_file(
+                "skills/agent-made/SKILL.md", "created during a run\n"
+            )
+            harness.close()
+            drafts = list_skill_drafts(
+                str(workspace_root), state_dir=root / "state"
+            )
+            self.assertIn("agent-made", drafts)
+            self.assertFalse((host / "agent-made" / "SKILL.md").exists())
+
+
+    def test_harness_uploads_inputs_and_exports_artifacts(self) -> None:
+        class Provider:
+            default_model = "fake-model"
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir()
+            source = root / "host-input"
+            source.mkdir()
+            (source / "resume.tex").write_text("CV\n", encoding="utf-8")
+            single = root / "single.tex"
+            single.write_text("SINGLE\n", encoding="utf-8")
+            artifacts = root / "artifacts"
+            harness = Harness(
+                workdir=workspace_root,
+                provider=Provider(),
+                policy=Policy("yolo"),
+                workspace_backend=LocalWorkspace(workspace_root),
+                persist=False,
+                inputs=[source, single],
+                export_paths=["out"],
+                artifacts_dir=artifacts,
+            )
+            harness.system_prompt
+            self.assertIn(
+                "CV", harness._backend.read_file("input/host-input/resume.tex")["text"]
+            )
+            self.assertEqual(
+                harness._backend.read_file("input/single.tex")["text"].strip(),
+                "SINGLE",
+            )
+            harness._backend.write_file("out/report.txt", "result\n")
+            harness.close()
+            self.assertEqual(
+                (artifacts / "out" / "report.txt").read_text(encoding="utf-8"),
+                "result\n",
+            )
+            self.assertEqual(harness.export_errors, [])
+
+
+    def test_export_contents_lands_company_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir()
+            workspace = LocalWorkspace(workspace_root)
+            workspace.write_file("application/Acme/application.pdf", "PDF\n")
+            host = root / "Application"
+            exported = export_artifacts(
+                ["application"], workspace, host, contents=True
+            )
+            self.assertEqual(
+                (host / "Acme" / "application.pdf").read_text(encoding="utf-8"),
+                "PDF\n",
+            )
+            self.assertEqual(len(exported), 1)
+            with self.assertRaises(FileExistsError):
+                export_artifacts(["application"], workspace, host, contents=True)
+            workspace.write_file("application/Acme/application.pdf", "NEW\n")
+            export_artifacts(
+                ["application"], workspace, host, contents=True, force=True
+            )
+            self.assertEqual(
+                (host / "Acme" / "application.pdf").read_text(encoding="utf-8"),
+                "NEW\n",
+            )
+
+
+    def test_export_now_supports_force_and_skips_close_reexport(self) -> None:
+        class Provider:
+            default_model = "fake-model"
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace_root = root / "workspace"
+            workspace_root.mkdir()
+            artifacts = root / "Application"
+            harness = Harness(
+                workdir=workspace_root,
+                provider=Provider(),
+                policy=Policy("yolo"),
+                workspace_backend=LocalWorkspace(workspace_root),
+                persist=False,
+                export_paths=["application"],
+                export_contents=True,
+                artifacts_dir=artifacts,
+            )
+            harness.system_prompt
+            self.assertEqual(harness.export_now(), [])
+            harness._backend.write_file("application/Acme/out.txt", "one\n")
+            exported = harness.export_now()
+            self.assertEqual(
+                (artifacts / "Acme" / "out.txt").read_text(encoding="utf-8"),
+                "one\n",
+            )
+            self.assertEqual(len(exported), 1)
+            with self.assertRaises(FileExistsError):
+                harness.export_now()
+            harness._backend.write_file("application/Acme/out.txt", "two\n")
+            harness.export_now(force=True)
+            self.assertEqual(
+                (artifacts / "Acme" / "out.txt").read_text(encoding="utf-8"),
+                "two\n",
+            )
+            harness.close()
 
 
 if __name__ == "__main__":

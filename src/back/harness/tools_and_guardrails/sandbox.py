@@ -15,8 +15,10 @@ Design constraints:
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import shlex
 import posixpath
 import subprocess
 import time
@@ -377,6 +379,35 @@ class OpenShellSandbox:
         return self._file_request(
             "write_file", path=path, content=content
         )
+
+    def upload_file(self, source: str | Path, path: str) -> dict[str, Any]:
+        """Upload one host file into the approved sandbox workspace.
+
+        Uses base64 over the worker stdin instead of the CLI upload path so
+        binary assets and text files are copied byte-for-byte.
+        """
+        if not self._started:
+            raise SandboxError("sandbox is not started")
+        source_path = Path(source).expanduser().resolve()
+        if not source_path.is_file():
+            raise FileNotFoundError(f"upload source is not a file: {source_path}")
+        target = self._workspace_source(path)
+        payload = base64.b64encode(source_path.read_bytes()).decode("ascii")
+        script = (
+            f"mkdir -p {shlex.quote(posixpath.dirname(target))} && "
+            f"base64 -d > {shlex.quote(target)}"
+        )
+        result = self._exec_cli(
+            ["/bin/sh", "-c", script],
+            workdir=None,
+            timeout=300,
+            input_text=payload,
+        )
+        if result.exit_code != 0:
+            raise SandboxError(
+                f"failed to upload {source_path.name!r}: {result.stderr.strip()}"
+            )
+        return {"path": target, "bytes": source_path.stat().st_size}
 
     def edit_file(self, path: str, old: str, new: str) -> dict[str, Any]:
         """Edit a workspace file through the sandbox worker."""

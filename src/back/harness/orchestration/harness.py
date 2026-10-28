@@ -25,7 +25,13 @@ from ..context_management.context import (
     estimate_tokens,
 )
 from ..context_management.memory import build_system_prompt, memory_tools
-from ..context_management.skills import skill_tools
+from ..context_management.skills import (
+    ensure_host_skills_dir,
+    resolve_host_skills_dir,
+    seed_skills,
+    skill_tools,
+    sync_skill_drafts,
+)
 from ..loop.runner import RunEvent, run_loop
 from ..loop.state import RunResult
 from ..loop.termination import TerminationPolicy
@@ -84,6 +90,16 @@ class Harness:
         child_max_turns: Turn limit per child.
         child_max_seconds: Time limit per child.
         child_max_tool_calls: Tool-call limit per child.
+        skills_dir: Optional host directory of ``<name>/SKILL.md`` packages to
+            upload into the workspace before the system prompt is built.
+        inputs: Optional host files/directories to upload into ``input/``.
+        export_paths: Optional workspace paths to download on clean shutdown.
+        artifacts_dir: Host directory that receives ``export_paths``.
+        export_contents: Merge an exported directory's children into
+            ``artifacts_dir`` instead of creating a subdirectory.
+        force_export: Replace an existing exported artifact.
+        sandbox_image: Optional approved OpenShell image, e.g. a TeX/Poppler
+            image for document skills.
         child_budget_tokens: Context budget per child.
         delegation_budget: Optional shared delegated-work counter.
         owns_sandbox: Whether ``close`` should delete the sandbox.
@@ -126,6 +142,13 @@ class Harness:
         child_budget_tokens: int | None = None,
         delegation_budget: DelegationBudget | None = None,
         owns_sandbox: bool | None = None,
+        skills_dir: str | Path | None = None,
+        inputs: list[str | Path] | None = None,
+        export_paths: list[str | Path] | None = None,
+        artifacts_dir: str | Path | None = None,
+        export_contents: bool = False,
+        force_export: bool = False,
+        sandbox_image: str | None = None,
     ) -> None:
         self.workdir = str(Path(workdir).resolve())
         self.provider = provider or DeepSeekProvider()
@@ -169,6 +192,23 @@ class Harness:
         self._task_state: TaskState | None = None
         self._task_observer: TaskStateObserver | None = None
         self._last_result: RunResult | None = None
+        self._skills_dir = resolve_host_skills_dir(skills_dir, self.workdir)
+        self.seeded_skills: list[str] = []
+        self.synced_skill_drafts: list[str] = []
+        self._input_paths = [str(item) for item in (inputs or [])]
+        self._export_paths = [str(item) for item in (export_paths or [])]
+        self._artifacts_dir = (
+            Path(artifacts_dir).expanduser().resolve()
+            if artifacts_dir not in {None, ""}
+            else None
+        )
+        self._export_contents = bool(export_contents)
+        self._force_export = bool(force_export)
+        self.uploaded_inputs: list[str] = []
+        self.exported_artifacts: list[Path] = []
+        self.export_errors: list[str] = []
+        self._exported_once = False
+        self._sandbox_image = str(sandbox_image) if sandbox_image else None
 
         self._backend = workspace_backend if workspace_backend is not None else sandbox
         self._sandbox = (
@@ -286,9 +326,12 @@ class Harness:
         if self._ready:
             return
         if self._backend is None:
-            self._sandbox = OpenShellSandbox(
-                workspace=self._sandbox_workspace or "irina"
-            )
+            options: dict[str, Any] = {
+                "workspace": self._sandbox_workspace or "irina"
+            }
+            if self._sandbox_image:
+                options["image"] = self._sandbox_image
+            self._sandbox = OpenShellSandbox(**options)
             self._sandbox.start()
             self._backend = self._sandbox
             self._owns_sandbox = True
@@ -304,6 +347,32 @@ class Harness:
                 "workspace backend does not expose an approved workspace path"
             )
         self._workspace = workspace
+
+        if self._input_paths and self._depth == 0:
+            from ..tools_and_guardrails.transfers import upload_inputs
+
+            try:
+                self.uploaded_inputs = upload_inputs(
+                    self._input_paths, self._backend
+                )
+            except Exception as exc:
+                raise HarnessError(
+                    f"input upload failed: {type(exc).__name__}: {exc}"
+                ) from None
+
+        if self._skills_dir is not None and self._depth == 0:
+            ensured = ensure_host_skills_dir(self._skills_dir)
+            if ensured is not None:
+                self._skills_dir = ensured
+            try:
+                self.seeded_skills = seed_skills(
+                    self._skills_dir,
+                    self._workspace,
+                    workspace=self._backend,
+                )
+            except Exception:
+                # Skills are optional; a bad host directory must not stop a run.
+                self.seeded_skills = []
 
         tools = core_tools(self._workspace, self._backend)
         tools.extend(memory_tools(self._workspace, workspace=self._backend))
@@ -748,11 +817,78 @@ class Harness:
             )
             return
 
+    def _export_path_exists(self, path: str) -> bool:
+        try:
+            listing = self._backend.list_files(f"{path}/**", limit=1)
+            if listing.get("paths"):
+                return True
+        except Exception:
+            pass
+        try:
+            self._backend.read_file(path, max_lines=1)
+            return True
+        except Exception:
+            return False
+
+    def export_now(self, *, force: bool | None = None) -> list[Path]:
+        """Export configured workspace paths to the host immediately."""
+        if self._artifacts_dir is None or not self._export_paths:
+            raise HarnessError(
+                "no artifact export is configured; use --export and "
+                "--artifacts-dir"
+            )
+        from ..tools_and_guardrails.transfers import export_artifacts
+
+        self.export_errors = []
+        existing = [
+            path for path in self._export_paths
+            if self._export_path_exists(path)
+        ]
+        if not existing:
+            self.exported_artifacts = []
+            return []
+        try:
+            self.exported_artifacts = export_artifacts(
+                existing,
+                self._backend,
+                self._artifacts_dir,
+                contents=self._export_contents,
+                force=(
+                    self._force_export if force is None else bool(force)
+                ),
+            )
+        except Exception as exc:
+            self.export_errors = [f"{type(exc).__name__}: {exc}"]
+            raise
+        self._exported_once = True
+        return list(self.exported_artifacts)
+
     def close(self) -> None:
         """Delete an owned sandbox and release the Harness.
 
         A shared child sandbox or a caller-provided backend is not deleted.
         """
+        if (
+            self._artifacts_dir is not None
+            and self._export_paths
+            and self._depth == 0
+            and self._ready
+            and not self._exported_once
+        ):
+            try:
+                self.export_now()
+            except Exception:
+                pass
+        if self._skills_dir is not None and self._depth == 0 and self._ready:
+            try:
+                self.synced_skill_drafts = sync_skill_drafts(
+                    self._skills_dir,
+                    self.workdir,
+                    workspace=self._backend,
+                    state_dir=self._state_dir,
+                )
+            except Exception:
+                self.synced_skill_drafts = []
         self._ready = False
         if (
             self._owns_sandbox

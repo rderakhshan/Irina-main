@@ -8,11 +8,10 @@ gateway and create a real sandbox; they skip when OpenShell is unavailable.
 python -m unittest discover -s tests -v
 ```
 
-Current offline run: **270 tests, OK** (2 skips for Windows symlink creation).
-The repository contains **279 tests**; the remaining 9 use real OpenShell
-sandboxes and were not rerun during final memory verification because the local
-Docker service was unavailable. Stage 4/5/6 live checks are separate; see the
-demo and memory READMEs.
+Current full run: **295 tests, OK** (2 skips for Windows symlink creation).
+OpenShell integration tests run when the local gateway is available and skip
+when it is not. Stage 4/5/6 live checks are separate; see the demo and memory
+READMEs.
 
 ## What is covered
 
@@ -177,6 +176,25 @@ demo and memory READMEs.
 - Harness memory retrieval/update hooks
 - architecture activation/rollback and canonical replay without source loss
 - candidate static/isolated checks, coding evaluation fixtures, and honest evolution status
+
+`test_memory_finalization.py`:
+
+- provider storage is workspace-scoped (no cross-project retrieval)
+- registry mutations are visible across independent instances and survive restart
+- an approved activation is preserved when a manager restarts
+- evolution fixture: generate → create → validate → register, never activate
+- a generated provider can be activated, store/retrieve, and roll back
+- evaluation rejects candidates that fail the provider contract
+
+`test_memory_logging.py`:
+
+- routine memory logs are hidden by default; errors remain visible
+- `--verbose` applies INFO/DEBUG/SUCCESS/WARNING/ERROR colors
+- `--no-color` produces plain output
+- provider handlers are replaced and reconfiguration never duplicates lines
+- provider `print` output is captured and filtered per memory operation
+- renderer memory notices follow `--verbose`; failed updates stay visible
+- the CLI parser exposes `--verbose`
 
 `test_streaming.py`:
 

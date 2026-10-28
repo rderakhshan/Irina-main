@@ -1,20 +1,98 @@
 # Irina
 
-Irina is a Python project for building and evaluating AI agents. Day 1 built a
-small agent loop that talks to DeepSeek and returns a clear result for every run.
-Day 2 added six workspace tools, an application permission policy, and execution
-inside an NVIDIA OpenShell sandbox. Stage 2 added context compaction, durable
-project memory, and loadable skills. Stage 3 added durable sessions, truthful
-crash recovery, sequential sub-agents, and one central `Harness`. Stage 4 adds
-the interactive/headless CLI, parallel fleet execution, artifact download, and
-three real product builds. Stage 5 adds genuine provider streaming and a
-polished event-driven terminal UI. Stage 6 vendors EvolveLab/MemEvolve and adds
-canonical experience storage, retrieval/update hooks, architecture replay, and
-safe memory-evolution bridges.
+**A memory-first coding agent that learns from verified work — and can evolve its own memory system.**
 
-The harness uses only the Python standard library. It does not use an agent
-framework or a vendor SDK. The repo targets Python 3.13; the harness code uses
-features available from Python 3.10.
+Irina is a Python agent harness for real terminal work. It runs a bounded model
+loop, executes tools inside an NVIDIA OpenShell sandbox, records truthful session
+history, and turns completed work into memory that is recalled on later tasks.
+The harness core uses only the Python standard library; optional memory research
+extras use their upstream dependencies.
+
+The project grew in visible stages: a DeepSeek loop, workspace tools and
+OpenShell, compaction and skills, durable sessions and sub-agents, an
+interactive CLI and fleet, genuine streaming and a semantic UI, and finally the
+vendored EvolveLab/MemEvolve memory system with canonical experience history.
+
+## Why Irina is different
+
+- **Truth over optimism.** A run has an explicit status. A stopped run is not
+  reported as finished. A memory is not "verified" because the model said so.
+- **Real isolation.** Tools execute in OpenShell with a confined filesystem and
+  no provider credentials, not in the host process.
+- **Durable evidence.** Sessions are append-only JSONL with crash repair and
+  unknown-outcome markers.
+- **Memory with a constitution.** Canonical experiences are host-side,
+  append-only, redacted, workspace-isolated, and independent of any provider's
+  storage format.
+- **Evolution with a gate.** The original MemEvolve engine can generate a new
+  memory provider; Irina validates it, registers it, and refuses to activate it
+  without explicit approval.
+- **Readable automation.** Streaming, Markdown, tool lifecycle, progress, and
+  colored diagnostics are designed for a terminal — not a wall of logs.
+
+## Contents
+
+- [Why Irina is different](#why-irina-is-different)
+- [Capability map](#capability-map)
+- [Memory that learns, not just notes](#memory-that-learns-not-just-notes)
+- [What works today](#what-works-today)
+- [Start here](#start-here)
+- [Quick start](#quick-start)
+- [Command line](#command-line)
+- [Layout](#layout)
+- [Limits](#limits)
+
+## Capability map
+
+| Area | What Irina gives you | Entry point |
+| --- | --- | --- |
+| Agent loop | Bounded turns, tokens, time, and tool calls with explicit stop reasons | `harness/loop/` |
+| Sandbox | OpenShell execution with non-root user, confined filesystem, denied egress | `harness/tools_and_guardrails/` |
+| Sessions | Append-only history, resume, truthful crash recovery | `harness/orchestration/session.py` |
+| Memory | 13-provider EvolveLab registry, canonical ledger, retrieval/learning hooks | `harness/context_management/memory/` |
+| Evolution | Original MemEvolve analyze/generate/create/validate + safe activation | `memory/evolution_bridge.py` |
+| CLI | Interactive and headless modes, sessions, memory administration | `harness/orchestration/cli.py` |
+| Fleet | Parallel isolated jobs with ordered results and failure isolation | `harness/orchestration/fleet.py` |
+| Terminal UI | Streaming Markdown, semantic colors, quiet-by-default memory logs | `harness/utils/` |
+
+## Memory that learns, not just notes
+
+Most agents "remember" by writing a note. Irina records **what happened**, decides
+whether it actually worked, and recalls the lesson later.
+
+```text
+before task ──▶ retrieve relevant experience ──▶ bounded lower-trust prompt block
+                                                             │
+task runs ──▶ tool/test evidence ──▶ canonical experience ───┘
+                                                             │
+                                     provider learns ──▶ next task recalls it
+```
+
+What that changes in practice:
+
+- A completed, verified coding run becomes a canonical experience automatically.
+- The active provider (for example Lightweight or ExpeL) extracts reusable
+  guidance from it.
+- A later task receives the most relevant guidance, capped by token budget and
+  labeled as historical evidence — never as authorization.
+- Provider failures are logged for retry; they never erase the experience.
+- A new architecture can be rebuilt from history, activated, and rolled back
+  without losing the timeline.
+
+```powershell
+# learn silently (routine memory logs hidden)
+uv run python main.py --mode yolo --memory -p "Fix the failing test"
+
+# see initialization, retrieval, ingestion, and persistence
+uv run python main.py --mode yolo --memory --verbose -p "Fix the failing test"
+
+# audit what was stored
+uv run python main.py memory --workdir . inspect
+```
+
+See the [Memory README](src/back/harness/context_management/memory/README.md) for
+the full lifecycle, storage layout, provider matrix, evolution workflow, safety
+model, and troubleshooting.
 
 ## What works today
 
@@ -41,12 +119,28 @@ features available from Python 3.10.
   indicators, tool lifecycle display, plain/redirected mode, and serialized
   fleet presentation.
 - Canonical, architecture-independent experience storage with redaction,
-  idempotent ingestion, recovery, workspace isolation, and versioned schemas.
-- Vendored original EvolveLab/MemEvolve source, a provider registry, memory
-  retrieval/update hooks, architecture replay/registry, coding evaluation
-  fixtures, and a safe candidate-validation bridge.
-- Original Lightweight Memory and ExpeL provider integration; optional
-  research dependencies remain isolated from ordinary Irina execution.
+  idempotent ingestion, torn-line recovery, workspace isolation, and versioned
+  schemas.
+- Vendored original EvolveLab/MemEvolve source with provenance, license,
+  manifest, and documented compatibility patches.
+- A provider registry with 13 upstream identifiers, layered availability
+  reporting, and a stable adapter that the agent loop never bypasses.
+- Automatic retrieval before a task and one learning update after it, with a
+  retry-safe `updates.jsonl` audit ledger.
+- Workspace-scoped provider storage, so two projects sharing a memory root
+  cannot read each other's provider memories.
+- Versioned architectures with isolated candidate storage, one active pointer,
+  atomic cross-process registry updates, explicit promotion, and rollback.
+- Replay from canonical history into a new architecture or storage
+  representation without modifying the source.
+- The original MemEvolve analyze/generate/create/validate workflow, writing into
+  an isolated build tree, with static + isolated + contract validation and no
+  automatic activation.
+- Dynamic loading of an approved generated provider from its recorded build tree.
+- Quiet memory logging by default; `--verbose` adds theme-colored diagnostics
+  while keeping errors visible.
+- Original Lightweight Memory and ExpeL provider integration; optional research
+  dependencies remain isolated from ordinary Irina execution.
 - A parallel fleet runner with isolated workspaces, ordered results, per-job
   failure isolation, optional review/repair phases, and metadata.
 - Artifact download from an owned OpenShell sandbox before cleanup.
@@ -64,10 +158,22 @@ also passed. Stage 4 produced `taskman/`, `artisan-coffee/`, and `viper/` throug
 real DeepSeek + OpenShell runs. `taskman` completed both build and review with 19
 tests passing. The two web projects met their mechanical checks, but their runs
 ended at `token_budget` before a completed review; browser interaction was not
-automated. The offline suite is 270 tests, OK (2 skipped). The repository
-contains 279 tests total; 9 use real OpenShell sandboxes and could not be rerun
-during final memory verification because the local Docker service was
-unavailable.
+automated. The current offline suite is **295 tests, OK (2 skipped)**, including
+the memory integration, finalization, and logging suites.
+
+Memory finalization checks:
+- Canonical store, provider update, and restart retrieval passed across separate
+  processes.
+- A full harness run produced one canonical experience and a restarted manager
+  retrieved it into bounded prompt context.
+- A live DeepSeek MemEvolve run completed analysis, generation, and creation; the
+  generated provider was correctly **rejected** because it omitted
+  `initialize()`. A controlled fixture candidate passed the same gate and was
+  registered `validated` without activation.
+- Replay, promotion, rollback, workspace isolation, and failure rejection were
+  exercised; canonical history survived activation and rollback.
+- Default memory logging produced zero routine lines; `--verbose` produced
+  colored diagnostics while memory operations continued normally.
 
 Stage 5 live streaming checks:
 - A real DeepSeek text-only stream delivered 92 deltas: first delta at 11.392s,
@@ -97,7 +203,7 @@ the exact caveats.
 | Harness | How a run is put together and how to use it | [src/back/harness/README.md](src/back/harness/README.md) |
 | CLI and fleet | Interactive/headless CLI, parallel jobs, artifact download | [Stage 4 in the harness README](src/back/harness/README.md#stage-4-cli-fleet-and-artifacts) |
 | Streaming UI | Real streaming, theme, Markdown, progress, fleet display | [Stage 5 in the harness README](src/back/harness/README.md#stage-5-streaming-and-terminal-ui) |
-| Memory / EvolveLab | Vendored providers, canonical experience history, replay, evolution bridge | [Memory README](src/back/harness/context_management/memory/README.md) |
+| Memory / EvolveLab | Learning lifecycle, 13 providers, canonical ledger, replay, evolution, safety, logging | [Memory README](src/back/harness/context_management/memory/README.md) |
 | Loop | Turn order, stop conditions, completion, events | [src/back/harness/loop/README.md](src/back/harness/loop/README.md) |
 | Providers | DeepSeek settings, message mapping, retries | [src/back/harness/providers/README.md](src/back/harness/providers/README.md) |
 | Tools and guardrails | Six tools, permission policy, shell, OpenShell | [src/back/harness/tools_and_guardrails/README.md](src/back/harness/tools_and_guardrails/README.md) |
@@ -109,9 +215,14 @@ the exact caveats.
 ## Quick start
 
 ```powershell
-uv sync
-python -m unittest discover -s tests -v
+uv sync                                                    # core agent
+uv sync --extra memory-research --extra memory-evolution   # optional memory sets
+uv run python -m unittest discover -s tests -v              # full suite
+uv run python main.py --memory                              # interactive with memory
 ```
+
+Requires Python 3.13 and NVIDIA OpenShell 0.1.5 for sandboxed tool execution.
+Add `DEEPSEEK_API_KEY` to the ignored `.env` file for live model calls.
 
 ## Command line
 
@@ -125,6 +236,8 @@ python main.py --resume                # latest resumable session
 python main.py --resume <session.jsonl>
 python main.py -p "Explain the test failure" --no-stream
 python main.py -p "Explain the test failure" --plain
+python main.py --memory                # enable learned experience
+python main.py --memory --verbose      # show colored memory diagnostics
 ```
 
 Streaming is on by default. `--no-stream` uses the original completion path;
@@ -134,6 +247,20 @@ instead of silently approving them; use `--mode yolo` explicitly. A run exits
 `0` only when the result is `completed`. Ctrl-C preserves the session and leaves
 an owned sandbox alive for `--resume`; a normal exit cleans it up. The same
 module entry point works as `python -m src.back.harness`.
+
+Memory flags:
+
+| Flag | Effect |
+| --- | --- |
+| `--memory` | Enable canonical experience + the configured EvolveLab provider |
+| `--no-memory` | Disable memory even when configuration enables it |
+| `--memory-provider <id>` | Select an upstream provider explicitly |
+| `--verbose` | Show routine memory logs with level colors |
+| `--no-color` / `--plain` | Keep verbose logs readable without ANSI |
+
+Default memory logging is intentionally silent. `--verbose` reports
+initialization, retrieval, ingestion, and persistence; errors stay visible in
+both modes.
 
 For the live check, add your key to the ignored `.env` file:
 
@@ -250,6 +377,30 @@ provider-contract probe, registers them without activating them, and skips the
 upstream benchmark-dataset validation stage unless `--validation-dataset` is
 provided.
 
+| Command | What to look for |
+| --- | --- |
+| `memory status` | Active architecture, config root, upstream provenance |
+| `memory providers` | Per-provider source/import/init/integration status |
+| `memory inspect` | Canonical count and latest experiences for the workspace |
+| `memory replay` | `validation_status: "validated"` and zero failed experiences |
+| `memory candidates` | State, storage namespace, evaluation evidence, active/previous |
+| `memory evaluate` | Contract + instantiation probe for one candidate |
+| `memory promote --approve` | `Activated <id>`; no automatic promotion exists |
+| `memory rollback` | `Rolled back to <id>`; canonical history remains |
+
+Storage at a glance:
+
+```text
+~/.irina/memory/
+├── workspaces/<workspace-id>/experiences.jsonl   # canonical, shared history
+├── providers/<provider>/<workspace-id>/          # per-workspace provider data
+├── providers/<provider>/<arch-id>/<workspace-id>/ # isolated candidate data
+├── architectures.json                            # active/previous versions
+├── selection.json                                # explicit provider choice
+├── updates.jsonl                                 # update audit ledger
+└── migrations/<target>.json                      # replay evidence
+```
+
 ## Layout
 
 ```
@@ -265,11 +416,12 @@ src/back/harness/orchestration/cli.py
                                     Interactive and headless front door
 src/back/harness/orchestration/fleet.py
                                     Parallel isolated jobs and result ordering
-src/back/harness/utils/             Terminal theme, formatting, Markdown, renderer, fleet UI
+src/back/harness/utils/             Terminal theme, renderer, Markdown, memory logging, fleet UI
 src/back/harness/context_management/memory/
                                     Canonical experience store, EvolveLab adapters,
                                     provider registry, architecture/replay,
-                                    evaluation, and vendored MemEvolve source
+                                    evolution/evaluation/security, memory logging,
+                                    and vendored MemEvolve source
 src/back/harness/context_management/
                                     Compaction, memory, skills, task state
 demos/                              Runnable examples and live checks
@@ -293,27 +445,40 @@ setup and common commands.
 
 ## Limits
 
-Stage 5 streaming redaction uses a bounded cross-chunk buffer for known
-credential markers. It is not a guarantee for arbitrary unknown secrets in
-model-generated prose. Terminal control sequences are stripped only for display;
-session history remains the source of truth. Stage 5 has no full-screen TUI and
-no artificial typing delay. Memory retrieval is lower-trust prompt context, not
-authorization. The canonical store is host-side. EvolveLab providers may need
-optional research dependencies; only tested providers are claimed available.
-MemEvolve's original engine is vendored but unavailable here until its
-FlashOAgents dependency set is installed. Stage 4 has a real CLI and parallel
-fleet, but no queue, distributed workers, database, or production multi-tenant
-scheduler. Fleet jobs are independent
-process-level jobs; child agents inside one Harness still run sequentially.
-Resuming requires the original OpenShell sandbox and workspace; if they are gone,
-the harness reports that limitation instead of creating a replacement and
-pretending files survived. The Stage 3 demonstration uses a scripted provider for
-determinism; the Stage 4 live runs used DeepSeek and are recorded in
-`stage4_results.json`. Web verification is static, not browser interaction.
-`artisan-coffee` and `viper` met mechanical checks but ended at `token_budget`
-before a completed review. Project memory is a bounded Markdown file, not a
-vector store. Day 2's sandboxing is a local OpenShell 0.1.5 setup launched through
-WSL 2, not a production multi-tenant deployment. The local file-only tool mode
-exists for tests and development; it is not an isolation boundary. A run that
-hits a limit stops; it is not turned into a success. The
-[harness README](src/back/harness/README.md#limits) has the details.
+Streaming redaction uses a bounded cross-chunk buffer for known credential
+markers; it is not a guarantee for arbitrary unknown secrets. Terminal control
+sequences are stripped only for display; session history remains the source of
+truth. There is no full-screen TUI and no artificial typing delay.
+
+Memory limits:
+
+- Retrieval is lower-trust prompt context, not authorization.
+- Only tested providers are claimed available; optional research dependencies
+  are reported as blocked, not simulated.
+- The canonical store is host-side and is not readable or writable from
+  OpenShell tools.
+- Upstream benchmark validation is skipped unless `--validation-dataset` is
+  supplied, because those dataset runners are not vendored.
+- Generated provider code is only as good as the model output. Irina validates
+  and rejects non-conforming candidates; it does not silently repair them.
+- Candidate isolation is a bounded validation gate, not a complete OpenShell
+  sandbox. Activation imports generated code into the Irina process, so
+  `--approve` is mandatory.
+- Legacy shared provider storage is not auto-attributed to a workspace; rebuild
+  it with `memory replay`.
+- `IRINA.md` remains a bounded human-readable project-memory file; the provider
+  memory system is separate from it.
+
+Other limits: there is no queue, distributed worker pool, database, or
+multi-tenant scheduler. Fleet jobs are independent process-level jobs; child
+agents inside one Harness still run sequentially. Resuming requires the original
+OpenShell sandbox and workspace; if they are gone, the harness reports that
+limitation instead of pretending files survived. The Stage 3 demonstration uses
+a scripted provider for determinism; Stage 4 live runs used DeepSeek and are
+recorded in `stage4_results.json`. Web verification is static, not browser
+interaction. `artisan-coffee` and `viper` met mechanical checks but ended at
+`token_budget` before a completed review. Day 2 sandboxing is a local OpenShell
+0.1.5 setup through WSL 2, not a production deployment. The local file-only tool
+mode exists for tests and development; it is not an isolation boundary. A run
+that hits a limit stops; it is not turned into a success. The
+[harness README](src/back/harness/README.md#limits) has more detail.

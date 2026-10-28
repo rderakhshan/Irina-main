@@ -166,7 +166,15 @@ an explicit command. Ordinary Irina execution:
 ```powershell
 uv run python main.py -p "Fix the failing test" --mode yolo --memory
 uv run python main.py -p "Fix the failing test" --mode yolo --memory --memory-provider expel
+uv run python main.py -p "Fix the failing test" --mode yolo --memory --verbose
 ```
+
+Routine provider logs (initialization, retrieval, ingestion, persistence) are
+hidden by default. `--verbose` shows them through the active terminal theme:
+INFO cyan, DEBUG dim, SUCCESS green, WARNING yellow, ERROR red. The existing
+`--no-color` and `--plain` flags keep them uncolored; errors remain visible in
+both modes. Provider `print` output is captured per memory operation, so it
+cannot leak into streaming text or the interactive prompt.
 
 ## Security boundaries
 

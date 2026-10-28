@@ -27,6 +27,7 @@ from ..loop.state import RunResult
 from .session import SessionError
 from ..tools_and_guardrails.security import Policy, redact_secrets
 from ..utils import TerminalRenderer, Theme
+from ..utils.memory_logging import configure_memory_logging
 from ..context_management.memory import (
     DeepSeekMemoryModel,
     MemoryConfig,
@@ -129,6 +130,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--memory-provider",
         default=None,
         help="Explicit EvolveLab provider identifier.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show routine memory logs with level-based terminal colors.",
     )
     parser.add_argument(
         "--max-turns",
@@ -489,6 +495,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         show_progress=not plain,
     )
     args.renderer = renderer
+    renderer.memory_verbose = bool(args.verbose)
     policy = build_policy(
         args,
         interactive=interactive,
@@ -505,6 +512,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"Irina cannot start: {type(exc).__name__}: {exc}"
         )
         return 2
+
+    configure_memory_logging(
+        verbose=bool(args.verbose),
+        theme=theme,
+        stream=sys.stderr,
+        on_emit=renderer.stop_progress,
+    )
 
     try:
         memory_config = MemoryConfig.load()
@@ -528,6 +542,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{type(exc).__name__}: {exc}"
         )
         return 2
+
+    # Providers may create their own child loggers during initialization.
+    configure_memory_logging(
+        verbose=bool(args.verbose),
+        theme=theme,
+        stream=sys.stderr,
+        on_emit=renderer.stop_progress,
+    )
 
     try:
         _try_resume(harness, args)

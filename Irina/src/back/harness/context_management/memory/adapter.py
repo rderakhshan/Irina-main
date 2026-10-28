@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from ...tools_and_guardrails.security import redact_secrets
+from ...utils.memory_logging import capture_memory_output
 from .experience_store import ExperienceRecord
 from .provider_registry import load_provider, upstream_imports
 from .retrieval_bridge import MemoryQuery, RetrievedMemory
@@ -112,7 +113,8 @@ class EvolveLabBackend:
         if model is not None:
             settings["model"] = model
         self.config = settings
-        self.provider = load_provider(provider_id, settings)
+        with capture_memory_output(provider=provider_id):
+            self.provider = load_provider(provider_id, settings)
         self._closed = False
 
     def add_experience(self, experience: ExperienceRecord) -> MemoryUpdateResult:
@@ -136,7 +138,8 @@ class EvolveLabBackend:
 
                 TrajectoryData = _TrajectoryData
             data = TrajectoryData(**payload)
-            ok, description = self.provider.take_in_memory(data)
+            with capture_memory_output(provider=self.provider_id):
+                ok, description = self.provider.take_in_memory(data)
             return MemoryUpdateResult(
                 bool(ok),
                 str(description),
@@ -179,7 +182,8 @@ class EvolveLabBackend:
                 status=MemoryStatus.BEGIN,
                 additional_params=query.metadata or {},
             )
-            response = self.provider.provide_memory(request)
+            with capture_memory_output(provider=self.provider_id):
+                response = self.provider.provide_memory(request)
             results = []
             for item in response.memories:
                 content = getattr(item, "content", None)

@@ -124,6 +124,7 @@ class TerminalRenderer:
         self._tool_ids: set[str] = set()
         self._run_started: float | None = None
         self._at_line_start = True
+        self.memory_verbose = False
 
     # -- basic output -------------------------------------------------
     def _write(self, text: str = "") -> None:
@@ -310,6 +311,8 @@ class TerminalRenderer:
             return
 
         if event.type is EventType.MEMORY:
+            if not self.memory_verbose and event.memory_ok is not False:
+                return
             self._progress.stop()
             self._flush_assistant()
             provider = one_line(event.memory_provider or "memory", 40)

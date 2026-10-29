@@ -1,0 +1,159 @@
+# Network-enabled OpenShell policy for Irina web tools.
+#
+# Select this policy explicitly:
+#   uv run main.py --sandbox-policy src/back/harness/tools_and_guardrails/openshell_policy_network.yaml
+#
+# Network access is still denied unless a destination is listed below. Each
+# rule names the sandbox binaries allowed to use it; without binaries OpenShell
+# logs the connection as denied because the runtime requires binary identity.
+# Enabling L7 network policies makes OpenShell add its proxy baseline paths
+# (for example /etc/passwd); this is why the strict policy is the default.
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /bin
+    - /usr
+    - /usr/local
+    - /lib
+    - /lib64
+    - /etc/ld.so.cache
+    - /etc/ssl
+    - /etc/nsswitch.conf
+    - /etc/texmf
+    - /etc/fonts
+    - /var/lib/texmf
+    - /etc/hosts
+    - /etc/resolv.conf
+    - /proc
+    - /dev/urandom
+  read_write:
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: hard_requirement
+
+process:
+  run_as_user: "1000"
+  run_as_group: "1000"
+
+network_policies:
+  allow_duckduckgo_search:
+    name: allow_duckduckgo_search
+    binaries: &python_binaries
+      - path: /usr/local/bin/python3.12
+      - path: /usr/bin/python3
+      - path: /usr/local/bin/python3
+    endpoints:
+      - host: html.duckduckgo.com
+        port: 443
+        protocol: rest
+        access: read-write
+        enforcement: enforce
+      - host: duckduckgo.com
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+      - host: lite.duckduckgo.com
+        port: 443
+        protocol: rest
+        access: read-write
+        enforcement: enforce
+  allow_example:
+    name: allow_example
+    binaries: *python_binaries
+    endpoints:
+      - host: example.com
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+      - host: www.example.com
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+  allow_http_testing:
+    name: allow_http_testing
+    binaries: *python_binaries
+    endpoints:
+      - host: httpbin.org
+        port: 443
+        protocol: rest
+        access: read-write
+        enforcement: enforce
+      - host: postman-echo.com
+        port: 443
+        protocol: rest
+        access: read-write
+        enforcement: enforce
+      - host: jsonplaceholder.typicode.com
+        port: 443
+        protocol: rest
+        access: read-write
+        enforcement: enforce
+  allow_wikipedia:
+    name: allow_wikipedia
+    binaries: *python_binaries
+    endpoints:
+      - host: "*.wikipedia.org"
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+  allow_github:
+    name: allow_github
+    binaries: *python_binaries
+    endpoints:
+      - host: github.com
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+      - host: raw.githubusercontent.com
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+      - host: "*.githubusercontent.com"
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+  allow_python_docs:
+    name: allow_python_docs
+    binaries: *python_binaries
+    endpoints:
+      - host: python.org
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+      - host: www.python.org
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+      - host: docs.python.org
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+      - host: pypi.org
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce
+      - host: files.pythonhosted.org
+        port: 443
+        protocol: rest
+        access: read-only
+        enforcement: enforce

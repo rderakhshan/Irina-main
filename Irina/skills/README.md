@@ -49,7 +49,7 @@ uv run python main.py `
   --export application `
   --export-contents `
   --artifacts-dir "D:\Application" `
-  --sandbox-image irina/application-tex:1 `
+  --sandbox-image irina/irina-tools:1 `
   --mode yolo -p "Prepare the application"
 ```
 

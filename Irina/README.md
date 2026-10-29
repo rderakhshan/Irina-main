@@ -98,7 +98,12 @@ model, and troubleshooting.
 
 - A bounded loop with explicit stop reasons.
 - A DeepSeek Chat Completions adapter.
-- Six workspace tools: read, write, edit, bash, list, and grep.
+- Six core workspace tools: read, write, edit, bash, list, and grep.
+- Eighteen web, document, and data tools (search, fetch, HTTP, download, PDF,
+  LaTeX, DOCX, XLSX, PPTX, SQL, datasets, and notebooks), all registered in the
+  same tool registry and executed inside OpenShell.
+- Collapsible multiline paste: large paste blocks show a compact placeholder
+  while the complete original text is sent to DeepSeek.
 - `read-only`, `safe`, and `yolo` permission modes with dangerous-command checks.
 - OpenShell 0.1.5 execution with a non-root user, confined filesystem, denied
   outbound network, and no provider credentials in the sandbox.
@@ -161,8 +166,8 @@ also passed. Stage 4 produced `taskman/`, `artisan-coffee/`, and `viper/` throug
 real DeepSeek + OpenShell runs. `taskman` completed both build and review with 19
 tests passing. The two web projects met their mechanical checks, but their runs
 ended at `token_budget` before a completed review; browser interaction was not
-automated. The current offline suite is **316 tests, OK (2 skipped)**, including
-the memory integration, finalization, and logging suites.
+automated. The current offline suite is **352 tests, OK (3 skipped)**, including
+the memory integration, finalization, extended-tools, and paste suites.
 
 Memory finalization checks:
 - Canonical store, provider update, and restart retrieval passed across separate
@@ -245,9 +250,14 @@ python main.py --skills-dir .\skills   # upload host skills before the first pro
 python main.py --prompt-file job.txt   # headless task from a host file
 ```
 
-For long or multi-line text, paste it directly. Irina collects the buffered
-paste lines into one task. If a terminal splits the paste, use the explicit
-`/paste` mode:
+For long or multi-line text, paste it directly. Irina uses bracketed paste when
+the terminal provides it and falls back to a short inter-key burst detector.
+Small pastes stay visible. A paste larger than 800 characters or three lines is
+shown as a compact placeholder such as `[Pasted text · 145 lines]`; the
+complete original text, including indentation and newlines, is still submitted
+unchanged. Text before and after a paste is preserved, multiple paste blocks
+work in one prompt, and Backspace removes a collapsed block as one unit. If a
+terminal splits the paste, use the explicit `/paste` mode:
 
 ```text
 /paste
@@ -296,7 +306,8 @@ Memory flags:
 | `--export-contents` | Merge an exported directory's contents into `--artifacts-dir` (e.g. `D:\Application\<Company>`) |
 | `--auto-export` | Export configured artifacts after each completed run |
 | `--force` | Replace an existing exported artifact |
-| `--sandbox-image <image>` | Use an approved OpenShell image, e.g. `irina/application-tex:1` |
+| `--sandbox-image <image>` | Use an approved OpenShell image, e.g. `irina/irina-tools:1` |
+| `--sandbox-policy <path>` | Use an approved OpenShell policy; `openshell_policy_network.yaml` enables the listed web destinations |
 | `--verbose` | Show routine memory logs with level colors |
 | `--no-color` / `--plain` | Keep verbose logs readable without ANSI |
 
@@ -331,13 +342,28 @@ directly as `D:\Application\<Company>\`. Without it, the export creates
 `D:\Application\application\<Company>\`. Existing company folders are
 refused unless `--force` is passed.
 
-The included `application` skill needs an image with TeX Live, Poppler, and
-pypdf:
+The `irina-tools` image includes TeX Live, Poppler, and the Python document,
+data, and notebook libraries used by the web/document/data tool groups:
 
 ```powershell
-wsl docker build -t irina/application-tex:1 .\images\application
-uv run python main.py --sandbox-image irina/application-tex:1 ...
+wsl docker build -t irina/irina-tools:1 .\images\application
+uv run python main.py --sandbox-image irina/irina-tools:1 ...
 ```
+
+Web tools are off by default because the default OpenShell policy denies
+network access. Select the shipped network policy explicitly to allow only its
+listed destinations:
+
+```powershell
+uv run python main.py `
+  --sandbox-image irina/irina-tools:1 `
+  --sandbox-policy src/back/harness/tools_and_guardrails/openshell_policy_network.yaml `
+  -p "Fetch https://example.com and summarize it"
+```
+
+Edit `openshell_policy_network.yaml` to add destinations. Enabling network
+policies makes OpenShell add its L7 proxy baseline paths, so the strict default
+policy remains the right choice when web access is not needed.
 
 See [images/application](images/application/README.md) and the
 [application skill](skills/application/SKILL.md).
@@ -499,7 +525,8 @@ Storage at a glance:
 Put machine-specific defaults in the ignored `.env` file once:
 
 ```dotenv
-IRINA_SANDBOX_IMAGE=irina/application-tex:1
+IRINA_SANDBOX_IMAGE=irina/irina-tools:1
+IRINA_SANDBOX_POLICY=src/back/harness/tools_and_guardrails/openshell_policy_network.yaml
 IRINA_SKILLS_DIR=skills
 IRINA_INPUTS=D:\Application\input\resume.tex
 IRINA_OPTIONAL_INPUTS=D:\Application\reference.pdf;D:\Application\examples

@@ -158,7 +158,7 @@ uv run python main.py `
   --export application `
   --export-contents `
   --artifacts-dir "D:\Application" `
-  --sandbox-image irina/application-tex:1 `
+  --sandbox-image irina/irina-tools:1 `
   --mode yolo -p "Prepare the application"
 ```
 
@@ -221,7 +221,8 @@ python -m unittest tests.test_context tests.test_memory tests.test_skills tests.
 python demos/stage2_context_memory_skills.py
 ```
 
-Current full offline suite: **316 tests, OK** with 2 Windows symlink skips. The live Stage 2
+Current full offline suite: **352 tests, OK** with 3 skips (two Windows symlink
+checks and one optional ExpeL dependency check). The live Stage 2
 demo passed:
 
 - **A:** five files, correct manifest, independent `wc -l` check, three

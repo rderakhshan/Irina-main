@@ -12,12 +12,14 @@ Design constraints:
 
 from .sandbox import (
     DEFAULT_IMAGE,
+    NETWORK_POLICY_PATH,
     OpenShellSandbox,
     SandboxError,
     SandboxResult,
     SandboxUnavailable,
     parse_worker_response,
 )
+from .extended_tools import extended_tools
 from .sandbox_worker import resolve_path
 from .security import (
     DENY_PATTERNS,
@@ -34,6 +36,7 @@ __all__ = [
     "DEFAULT_SHELL",
     "DENY_PATTERNS",
     "LocalWorkspace",
+    "NETWORK_POLICY_PATH",
     "OpenShellSandbox",
     "Policy",
     "READ_TOOLS",
@@ -45,6 +48,7 @@ __all__ = [
     "Tool",
     "core_tools",
     "dangerous_pattern",
+    "extended_tools",
     "is_dangerous_command",
     "parse_worker_response",
     "resolve_path",

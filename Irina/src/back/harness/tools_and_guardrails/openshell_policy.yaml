@@ -1,7 +1,8 @@
 # OpenShell sandbox policy for Irina Day 2.
 # No provider is attached when this policy is used, and the host model key is
 # never passed into the sandbox. No network rules are declared, so outbound
-# connections are denied by default.
+# connections are denied by default. Use openshell_policy_network.yaml (and
+# --sandbox-policy) when web tools need approved network destinations.
 version: 1
 
 filesystem_policy:

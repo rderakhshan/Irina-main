@@ -16,9 +16,25 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-READ_TOOLS = frozenset({"read_file", "list_files", "grep"})
+from .tool_worker import is_remote_database, sql_is_read_only
+
+READ_TOOLS = frozenset(
+    {
+        "read_file",
+        "list_files",
+        "grep",
+        "web_search",
+        "web_fetch",
+        "read_pdf",
+        "read_docx",
+        "read_xlsx",
+        "database_schema",
+        "read_data",
+    }
+)
 READ_ONLY_TOOLS = READ_TOOLS | {"use_skill"}
 COMMAND_TOOLS = frozenset({"bash", "shell", "powershell", "pwsh"})
+SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 MODES = frozenset({"read-only", "safe", "yolo"})
 
 SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -167,6 +183,24 @@ class Policy:
                         f"matched {matched}"
                     )
 
+        if name == "sql_query":
+            query = str(args.get("query", ""))
+            database = str(args.get("database", ""))
+            if not is_remote_database(database) and sql_is_read_only(query):
+                return None
+            if self.mode == "read-only":
+                return "sql_query modifies or connects externally; it is blocked in read-only mode"
+
+        if name == "http_request":
+            method = str(args.get("method", "GET")).upper()
+            if method in SAFE_HTTP_METHODS:
+                return None
+            if self.mode == "read-only":
+                return (
+                    f"http_request with method {method} is blocked in "
+                    "read-only mode"
+                )
+
         if name in READ_ONLY_TOOLS:
             return None
         if self.mode == "yolo":
@@ -198,5 +232,16 @@ class Policy:
             "edit_file": "edits a file in the workspace",
             "bash": "runs a command inside the sandbox",
             "remember": "writes durable project memory in the workspace",
+            "http_request": "sends a non-read-only HTTP request from the sandbox",
+            "download_url": "downloads a file into the workspace",
+            "sql_query": "modifies a database or connects to an external database",
+            "create_pdf": "creates a PDF in the workspace",
+            "edit_pdf": "modifies PDF files in the workspace",
+            "compile_latex": "runs a LaTeX compiler inside the sandbox",
+            "write_docx": "writes a Word document in the workspace",
+            "write_xlsx": "writes a spreadsheet in the workspace",
+            "create_pptx": "writes a presentation in the workspace",
+            "write_data": "writes a dataset in the workspace",
+            "execute_notebook": "executes notebook code inside the sandbox",
         }
         return reasons.get(name, "requests a non-read-only operation")

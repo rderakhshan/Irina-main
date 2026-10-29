@@ -28,9 +28,12 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("openshell_policy.yaml")
+NETWORK_POLICY_PATH = Path(__file__).with_name("openshell_policy_network.yaml")
 DEFAULT_WORKER_PATH = Path(__file__).with_name("sandbox_worker.py")
+DEFAULT_TOOL_WORKER_PATH = Path(__file__).with_name("tool_worker.py")
 DEFAULT_IMAGE = "python:3.12-slim"
 WORKER_SANDBOX_PATH = "/tmp/irina_worker.py"
+TOOL_WORKER_SANDBOX_PATH = "/tmp/irina_tool_worker.py"
 DEFAULT_CREATE_TIMEOUT = 300
 DEFAULT_FILE_TIMEOUT = 60
 
@@ -725,6 +728,25 @@ class OpenShellSandbox:
             raise SandboxError(
                 "could not upload the sandbox worker: "
                 f"{_decode(uploaded.stderr).strip()}"
+            )
+        tool_worker = self.worker_path.with_name("tool_worker.py")
+        if not tool_worker.is_file():
+            tool_worker = DEFAULT_TOOL_WORKER_PATH
+        tool_upload = self._cli(
+            [
+                "sandbox",
+                "upload",
+                self.name,
+                self._wsl_path(tool_worker),
+                TOOL_WORKER_SANDBOX_PATH,
+                "--no-git-ignore",
+            ],
+            timeout=120,
+        )
+        if tool_upload.returncode != 0:
+            raise SandboxError(
+                "could not upload the sandbox tool worker: "
+                f"{_decode(tool_upload.stderr).strip()}"
             )
         self.workspace = workspace
 

@@ -2,16 +2,25 @@
 
 Most tests run offline. They use a scripted provider and mocked HTTP, so they
 need no API key and no network. The OpenShell integration tests need a local
-gateway and create a real sandbox; they skip when OpenShell is unavailable.
+gateway and create a real sandbox; they skip when OpenShell is unavailable. The
+extended document/data tests also need the approved `irina/irina-tools:1` image
+and skip when it cannot be created.
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-Current full run: **316 tests, OK** (2 skips for Windows symlink creation).
-OpenShell integration tests run when the local gateway is available and skip
-when it is not. Stage 4/5/6 live checks are separate; see the demo and memory
-READMEs.
+If your local ignored `.env` enables memory, disable it for the offline suite:
+
+```powershell
+$env:IRINA_MEMORY_ENABLED='0'
+python -m unittest discover -s tests -v
+```
+
+Current full run: **352 tests, OK** (3 skips: two Windows symlink checks and one
+optional ExpeL dependency check). OpenShell integration tests run when the local
+gateway is available and skip when it is not. Stage 4/5/6 live checks are
+separate; see the demo and memory READMEs.
 
 ## What is covered
 
@@ -40,11 +49,35 @@ READMEs.
 `test_tools.py`:
 
 - tool decorator schemas and required arguments
-- all six workspace tools
+- all six core workspace tools
 - line numbering, 4,000-line reads, and search clipping
 - ignored directories and deterministic listing
 - path escape rejection
 - command execution refusal without OpenShell
+
+`test_extended_tools.py`:
+
+- all 18 extended tools register with valid JSON schemas
+- the single Harness registry also preserves the nine existing tools
+- DeepSeek-style tool discovery and invocation through the existing loop
+- real web search, fetch, HTTP, download, and network-denial checks
+- PDF create/read/merge/rotate/split and LaTeX compilation
+- DOCX, XLSX, and PPTX create/read checks
+- SQLite queries, schema inspection, and parameterized mutations
+- CSV, JSON, and Parquet round trips
+- notebook execution with real outputs and captured errors
+- invalid paths, malformed documents, timeouts, and missing libraries
+- no host execution without OpenShell
+
+`test_paste.py`:
+
+- small pastes remain visible
+- pastes over 800 characters or three lines collapse to a placeholder
+- original text, indentation, newlines, and special characters are preserved
+- multiple paste blocks and surrounding text
+- collapsed-block backspace and expansion
+- bracketed markers and the burst fallback
+- CLI capture submits the complete original text
 
 `test_security.py`:
 
@@ -61,9 +94,9 @@ READMEs.
 
 `test_openshell_integration.py`:
 
-- all six tools inside a real sandbox
-- filesystem isolation and `/etc/passwd` denial
-- outbound network denial
+- all six core tools inside a real sandbox
+- filesystem isolation and `/etc/passwd` denial under the strict policy
+- outbound network denial under the strict default policy
 - non-root process identity and setuid denial
 - no provider credentials in the sandbox
 - launch from Windows PowerShell through WSL
@@ -155,7 +188,7 @@ READMEs.
 - interactive prompt loop and `continue_task` follow-ups
 - event/output redaction
 - startup errors and workspace preparation
-- `/paste` multi-line input, `/file`, and `--prompt-file` loading
+- `/paste` multi-line input, `/file`, `--prompt-file`, and bracketed/paste capture
 
 `test_fleet.py`:
 
@@ -256,6 +289,12 @@ Stage 4 checks:
 
 ```powershell
 python -m unittest tests.test_cli tests.test_fleet tests.test_sandbox_download tests.test_stage4_projects -v
+```
+
+Extended tool and paste checks:
+
+```powershell
+python -m unittest tests.test_extended_tools tests.test_paste -v
 ```
 
 Stage 5/6 checks:

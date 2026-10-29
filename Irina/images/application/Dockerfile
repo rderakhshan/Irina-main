@@ -17,5 +17,6 @@ RUN apt-get update \
         poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "pypdf>=5"
+COPY requirements.txt /tmp/requirements.txt
 
+RUN pip install --no-cache-dir -r /tmp/requirements.txt

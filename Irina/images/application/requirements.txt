@@ -1,0 +1,12 @@
+pypdf==6.21.4
+reportlab==5.1.0
+python-docx==1.2.0
+openpyxl==3.1.5
+python-pptx==1.0.2
+pandas==3.1.0
+pyarrow==26.0.0
+nbclient==0.11.0
+nbformat==5.11.1
+ipykernel==7.4.0
+SQLAlchemy==2.1.6
+requests==2.34.2

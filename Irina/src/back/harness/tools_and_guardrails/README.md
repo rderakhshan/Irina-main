@@ -1,21 +1,29 @@
 # Tools and guardrails
 
-This folder gives Irina six workspace tools, an application permission policy, a
-shell interface, and the OpenShell sandbox adapter. The policy decides whether a
-request is allowed. OpenShell decides what the sandbox can actually reach.
+This folder gives Irina six core workspace tools, eighteen web/document/data
+tools, an application permission policy, a shell interface, and the OpenShell
+sandbox adapter. The policy decides whether a request is allowed. OpenShell
+decides what the sandbox can actually reach.
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
-| `tools.py` | `Tool`, `tool`, the six tools, and the local file-only test backend. |
+| `tools.py` | `Tool`, `tool`, the six core tools, and the local file-only test backend. |
+| `extended_tools.py` | Builds the 18 web, document, and data tools for the shared registry. |
+| `web_tools/` | Search, page fetch, HTTP requests, and downloads. |
+| `document_tools/` | PDF, LaTeX, DOCX, XLSX, and PPTX tools. |
+| `data_tools/` | SQL, dataset, and notebook tools. |
+| `tool_worker.py` | Sandbox-side implementation for all 18 extended tools. |
+| `_runtime.py` | Host-side bridge that forwards one JSON request to the worker. |
 | `security.py` | `Policy`, modes, approval callback, and dangerous-command rules. |
 | `shell.py` | Explicit shell configuration and the command result shape. |
 | `sandbox.py` | OpenShell lifecycle, command execution, and worker calls. |
 | `sandbox_worker.py` | Sandbox-side file operations and the shared path resolver. |
-| `openshell_policy.yaml` | Filesystem, network, and process policy used at creation. |
+| `openshell_policy.yaml` | Strict default policy: no network, confined filesystem. |
+| `openshell_policy_network.yaml` | Opt-in policy with explicit web endpoints. |
 
-## The six tools
+## The six core tools
 
 | Tool | What it does |
 | --- | --- |
@@ -26,7 +34,19 @@ request is allowed. OpenShell decides what the sandbox can actually reach.
 | `list_files` | Lists files with glob matching and ignored build directories. |
 | `grep` | Searches file contents with a regex and returns `path:line: text`. |
 
-All six take string arguments, which is what the existing provider expects.
+## The 18 extended tools
+
+| Group | Tools |
+| --- | --- |
+| Web & network | `web_search`, `web_fetch`, `http_request`, `download_url` |
+| PDF & documents | `read_pdf`, `create_pdf`, `edit_pdf`, `compile_latex`, `read_docx`, `write_docx`, `read_xlsx`, `write_xlsx`, `create_pptx` |
+| Databases & data | `sql_query`, `database_schema`, `read_data`, `write_data`, `execute_notebook` |
+
+All tools take string arguments, which is what the existing provider expects.
+The extended tools describe their provider schema on the host and forward one
+JSON request to `tool_worker.py` inside OpenShell. `LocalWorkspace` cannot run
+commands, so these tools fail with `SandboxUnavailable` rather than touching the
+host.
 
 ## Where paths are checked
 
@@ -37,14 +57,17 @@ inside the sandbox, so the check happens in the same filesystem as the write.
 
 `core_tools(workdir)` without a backend uses the same worker locally for unit
 tests. That mode is file-only and cannot run commands; it is not a sandbox. The
-demo and integration tests pass an `OpenShellSandbox`, which makes all six tools
-use the sandbox.
+demo and integration tests pass an `OpenShellSandbox`, which makes all six core
+tools use the sandbox.
 
 ## Permissions
 
 `Policy` modes:
 
-- `read-only`: allows `read_file`, `list_files`, and `grep`.
+- `read-only`: allows read tools, including `web_search`, `web_fetch`,
+  `read_pdf`, `read_docx`, `read_xlsx`, `read_data`, and
+  `database_schema`. `sql_query` is allowed only when it is a local read-only
+  statement; `http_request` is allowed only for GET, HEAD, and OPTIONS.
 - `safe`: also allows writes and commands after `approver(call, reason)` returns
   exactly `True`. Without an approver, those requests are refused.
 - `yolo`: allows writes and commands without asking, but still checks dangerous
@@ -77,6 +100,19 @@ The adapter uses the documented OpenShell 0.1.5 CLI:
 On Windows it calls `wsl.exe -e openshell ...`. The default image is
 `python:3.12-slim` because the stock OpenShell Ubuntu image does not include
 Python. Docker must be able to see that image.
+
+The default `openshell_policy.yaml` declares no network rules, so outbound
+connections are denied. Web tools need the opt-in network policy:
+
+```powershell
+uv run python main.py `
+  --sandbox-image irina/irina-tools:1 `
+  --sandbox-policy src/back/harness/tools_and_guardrails/openshell_policy_network.yaml
+```
+
+`openshell_policy_network.yaml` lists each allowed host and the sandbox Python
+binaries permitted to use it. Unlisted destinations still fail with a clear
+network-policy error; the tools never retry outside OpenShell.
 
 `openshell_policy.yaml` sets:
 

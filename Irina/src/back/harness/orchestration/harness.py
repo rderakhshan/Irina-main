@@ -49,6 +49,7 @@ from .session import (
 )
 from .subagent import DelegationBudget, subagent_tool
 from ..tools_and_guardrails.sandbox import OpenShellSandbox, SandboxError
+from ..tools_and_guardrails.extended_tools import extended_tools
 from ..tools_and_guardrails.security import Policy, redact_secrets
 from ..tools_and_guardrails.tools import Tool, core_tools
 
@@ -100,6 +101,8 @@ class Harness:
         force_export: Replace an existing exported artifact.
         sandbox_image: Optional approved OpenShell image, e.g. a TeX/Poppler
             image for document skills.
+        sandbox_policy: Optional approved OpenShell policy YAML. Use the shipped
+            network policy when web tools need approved destinations.
         child_budget_tokens: Context budget per child.
         delegation_budget: Optional shared delegated-work counter.
         owns_sandbox: Whether ``close`` should delete the sandbox.
@@ -149,6 +152,7 @@ class Harness:
         export_contents: bool = False,
         force_export: bool = False,
         sandbox_image: str | None = None,
+        sandbox_policy: str | Path | None = None,
     ) -> None:
         self.workdir = str(Path(workdir).resolve())
         self.provider = provider or DeepSeekProvider()
@@ -209,6 +213,11 @@ class Harness:
         self.export_errors: list[str] = []
         self._exported_once = False
         self._sandbox_image = str(sandbox_image) if sandbox_image else None
+        self._sandbox_policy = (
+            str(Path(sandbox_policy).expanduser().resolve())
+            if sandbox_policy not in {None, ""}
+            else None
+        )
 
         self._backend = workspace_backend if workspace_backend is not None else sandbox
         self._sandbox = (
@@ -331,6 +340,8 @@ class Harness:
             }
             if self._sandbox_image:
                 options["image"] = self._sandbox_image
+            if self._sandbox_policy:
+                options["policy_path"] = self._sandbox_policy
             self._sandbox = OpenShellSandbox(**options)
             self._sandbox.start()
             self._backend = self._sandbox
@@ -375,6 +386,9 @@ class Harness:
                 self.seeded_skills = []
 
         tools = core_tools(self._workspace, self._backend)
+        tools.extend(
+            extended_tools(self._workspace, self._backend)
+        )
         tools.extend(memory_tools(self._workspace, workspace=self._backend))
         tools.extend(skill_tools(self._workspace, workspace=self._backend))
         if self.enable_subagents:
@@ -514,6 +528,8 @@ class Harness:
             child_budget_tokens=self._child_budget_tokens,
             delegation_budget=self._delegation_budget,
             owns_sandbox=False,
+            sandbox_image=self._sandbox_image,
+            sandbox_policy=self._sandbox_policy,
         )
 
     def _open_session(

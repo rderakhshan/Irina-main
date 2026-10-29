@@ -35,7 +35,7 @@ characters, and the word "list". The text check is intentionally simple.
 ## OpenShell workspace demo
 
 `day2_openshell.py` runs a real agent inside an NVIDIA OpenShell sandbox with all
-six workspace tools and `Policy("yolo")`.
+six core workspace tools and `Policy("yolo")`.
 
 ```powershell
 python demos/day2_openshell.py

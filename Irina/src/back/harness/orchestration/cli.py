@@ -28,6 +28,14 @@ from ..loop.state import RunResult
 from .session import SessionError
 from ..tools_and_guardrails.security import Policy, redact_secrets
 from ..utils import TerminalRenderer, Theme
+from ..utils.paste import (
+    PASTE_END,
+    PASTE_START,
+    PromptComposer,
+    compose_stream,
+    is_large_paste,
+    strip_paste_markers,
+)
 from ..utils.memory_logging import configure_memory_logging
 from ..context_management.memory import (
     DeepSeekMemoryModel,
@@ -118,8 +126,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="IMAGE",
         help=(
-            "Approved OpenShell image, e.g. irina/application-tex:1. "
+            "Approved OpenShell image, e.g. irina/irina-tools:1. "
             "Defaults to the built-in image."
+        ),
+    )
+    parser.add_argument(
+        "--sandbox-policy",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Approved OpenShell policy YAML. Use "
+            "openshell_policy_network.yaml to allow the listed web "
+            "destinations; defaults to the strict no-network policy."
         ),
     )
     parser.add_argument(
@@ -380,6 +398,7 @@ def build_harness(
         export_contents=getattr(args, "export_contents", False),
         force_export=getattr(args, "force_export", False),
         sandbox_image=getattr(args, "sandbox_image", None),
+        sandbox_policy=getattr(args, "sandbox_policy", None),
     )
 
 
@@ -464,6 +483,8 @@ def _apply_env_defaults(args: argparse.Namespace) -> None:
         return
     if not args.sandbox_image:
         args.sandbox_image = os.environ.get("IRINA_SANDBOX_IMAGE") or None
+    if not args.sandbox_policy:
+        args.sandbox_policy = os.environ.get("IRINA_SANDBOX_POLICY") or None
     if args.skills_dir == "skills":
         args.skills_dir = os.environ.get("IRINA_SKILLS_DIR", args.skills_dir)
     if not args.inputs:
@@ -533,131 +554,222 @@ def _run_headless(
 
 
 MAX_PROMPT_CHARS = 200_000
-_BRACKETED_PASTE_START = "\x1b[200~"
-_BRACKETED_PASTE_END = "\x1b[201~"
+_BRACKETED_PASTE_START = PASTE_START
+_BRACKETED_PASTE_END = PASTE_END
 PASTE_TERMINATORS = {'"""', "/end"}
+ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
+_BURST_GAP_SECONDS = 0.02
+_ENTER_GAP_SECONDS = 0.15
+
+
+def _set_bracketed_paste(enabled: bool) -> int | None:
+    """Enable or restore Windows virtual-terminal input.
+
+    Returns the previous console mode when it can be changed so the caller can
+    restore it. Other platforms and consoles are left untouched.
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.GetStdHandle(-10)
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return None
+        previous = int(mode.value)
+        if enabled:
+            kernel32.SetConsoleMode(handle, previous | ENABLE_VIRTUAL_TERMINAL_INPUT)
+        else:
+            kernel32.SetConsoleMode(handle, previous & ~ENABLE_VIRTUAL_TERMINAL_INPUT)
+        return previous
+    except Exception:
+        return None
+
+
+def _flush_burst(
+    composer: PromptComposer,
+    burst: list[str],
+    write: Callable[[str], None],
+) -> bool:
+    """Flush buffered key events.
+
+    A burst is treated as a paste when it is large; this is the fallback for
+    terminals that do not deliver bracketed-paste markers. The caller tracks
+    Enter separately, so a flush never ends the prompt by itself.
+    """
+    if not burst:
+        return False
+    text = "".join(burst)
+    burst.clear()
+    if is_large_paste(text):
+        write(composer.add_paste(text))
+    else:
+        write(composer.add_typed(text))
+    return False
+
+
+def _read_windows_console_line(prompt: str) -> str:
+    """Read one line with bracketed-paste and burst-paste support."""
+    import msvcrt
+
+    composer = PromptComposer()
+    previous_mode = _set_bracketed_paste(True)
+
+    def write(text: str) -> None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    write(prompt)
+    state = "normal"
+    escape = ""
+    paste_buffer = ""
+    paste_escape = ""
+    burst: list[str] = []
+    last_key = time.monotonic()
+    ends_with_enter = False
+    try:
+        while True:
+            try:
+                ready = msvcrt.kbhit()
+            except (OSError, ValueError):
+                return input(prompt)
+            now = time.monotonic()
+            if ready:
+                try:
+                    char = msvcrt.getwch()
+                except (OSError, ValueError):
+                    return input(prompt)
+                if char in {"\x00", "\xe0"}:
+                    if msvcrt.kbhit():
+                        msvcrt.getwch()
+                    last_key = now
+                    continue
+                if char == "\x03":
+                    raise KeyboardInterrupt
+                if state == "normal":
+                    if char == "\x1b":
+                        ends_with_enter = _flush_burst(composer, burst, write) or ends_with_enter
+                        escape = char
+                        state = "escape"
+                    elif char in {"\r", "\n"}:
+                        if burst and now - last_key < _BURST_GAP_SECONDS:
+                            # A newline inside a fast burst is pasted content,
+                            # not the Enter key that submits the prompt.
+                            burst.append("\n")
+                            ends_with_enter = False
+                        else:
+                            ends_with_enter = _flush_burst(
+                                composer, burst, write
+                            )
+                            composer.add_typed("\n")
+                            write("\n")
+                            ends_with_enter = True
+                    elif char == "\x08":
+                        ends_with_enter = _flush_burst(composer, burst, write)
+                        removed = composer.backspace()
+                        if removed:
+                            write("\b \b" * removed)
+                        ends_with_enter = False
+                    elif char == "\x05":
+                        ends_with_enter = _flush_burst(composer, burst, write)
+                        if composer.expand_last_paste() is not None:
+                            write("\r\x1b[2K" + prompt + composer.render())
+                        ends_with_enter = False
+                    else:
+                        burst.append(char)
+                        ends_with_enter = False
+                elif state == "escape":
+                    escape += char
+                    if escape == _BRACKETED_PASTE_START:
+                        paste_buffer = ""
+                        state = "paste"
+                    elif _BRACKETED_PASTE_START.startswith(escape):
+                        pass
+                    else:
+                        # Drop an unrecognized escape sequence (arrows, F-keys).
+                        state = "normal"
+                        escape = ""
+                elif state == "paste":
+                    if char == "\x1b":
+                        paste_escape = char
+                        state = "paste_escape"
+                    else:
+                        paste_buffer += char
+                elif state == "paste_escape":
+                    paste_escape += char
+                    if paste_escape == _BRACKETED_PASTE_END:
+                        write(composer.add_paste(paste_buffer))
+                        paste_buffer = ""
+                        paste_escape = ""
+                        state = "normal"
+                        ends_with_enter = False
+                    elif _BRACKETED_PASTE_END.startswith(paste_escape):
+                        pass
+                    else:
+                        paste_buffer += paste_escape
+                        paste_escape = ""
+                        state = "paste"
+                last_key = now
+                continue
+
+            if burst and now - last_key > _BURST_GAP_SECONDS:
+                if _flush_burst(composer, burst, write):
+                    ends_with_enter = True
+            if ends_with_enter and now - last_key > _ENTER_GAP_SECONDS:
+                break
+            time.sleep(0.005)
+    finally:
+        if previous_mode is not None:
+            _set_bracketed_paste(False)
+            try:
+                import ctypes
+
+                kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                kernel32.SetConsoleMode(
+                    kernel32.GetStdHandle(-10), previous_mode
+                )
+            except Exception:
+                pass
+    return composer.submit().strip("\n")
 
 
 def _read_console_line(prompt: str) -> str:
-    """Read one console entry, collecting a multi-line paste as one task."""
+    """Read one console entry, collapsing large paste blocks."""
     try:
-        if (
-            os.name != "nt"
-            or not sys.stdin.isatty()
-            or not sys.stdout.isatty()
-        ):
-            return input(prompt)
+        interactive = (
+            os.name == "nt"
+            and sys.stdin.isatty()
+            and sys.stdout.isatty()
+        )
     except (AttributeError, OSError):
-        return input(prompt)
-    import msvcrt
-
-    sys.stdout.write(prompt)
-    sys.stdout.flush()
-    chars: list[str] = []
-    last = time.monotonic()
-    while True:
-        try:
-            ready = msvcrt.kbhit()
-        except (OSError, ValueError):
-            return input(prompt)
-        if ready:
-            try:
-                char = msvcrt.getwch()
-            except (OSError, ValueError):
-                return input(prompt)
-            if char in {"\x00", "\xe0"}:
-                if msvcrt.kbhit():
-                    msvcrt.getwch()
-                continue
-            if char == "\x03":
-                raise KeyboardInterrupt
-            if char in {"\r", "\n"}:
-                chars.append("\n")
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-                last = time.monotonic()
-                continue
-            if char == "\x08":
-                if chars and chars[-1] != "\n":
-                    chars.pop()
-                    sys.stdout.write("\b \b")
-                    sys.stdout.flush()
-                continue
-            chars.append(char)
-            sys.stdout.write(char)
-            sys.stdout.flush()
-            last = time.monotonic()
-            continue
-        if chars and chars[-1] == "\n":
-            if time.monotonic() - last > 0.15:
-                break
-        time.sleep(0.01)
-    return "".join(chars).strip("\n")
+        interactive = False
+    if not interactive:
+        return _clean_paste(input(prompt))
+    return _read_windows_console_line(prompt)
 
 
 def _clean_paste(text: str) -> str:
-    return (
-        text.replace(_BRACKETED_PASTE_START, "")
-        .replace(_BRACKETED_PASTE_END, "")
-        .strip()
-    )
-
-
-def _drain_windows_paste(initial: str) -> str:
-    """Collect remaining console lines pasted after the first line.
-
-    Windows terminals deliver a multi-line paste as buffered key events. Input
-    is read until the buffer is idle for a short interval; a normally typed
-    single line has nothing buffered and is returned unchanged.
-    """
-    if os.name != "nt":
-        return initial
-    try:
-        import msvcrt
-    except ImportError:
-        return initial
-    chunks = [initial]
-    current = ""
-    last = time.monotonic()
-    while True:
-        try:
-            ready = msvcrt.kbhit()
-        except (OSError, ValueError):
-            break
-        if ready:
-            try:
-                char = msvcrt.getwch()
-            except (OSError, ValueError):
-                break
-            if char in {"\x00", "\xe0"}:
-                if msvcrt.kbhit():
-                    msvcrt.getwch()
-                continue
-            if char in {"\r", "\n"}:
-                if current:
-                    chunks.append(current)
-                    current = ""
-                last = time.monotonic()
-                continue
-            current += char
-            last = time.monotonic()
-            continue
-        if time.monotonic() - last > 0.08:
-            break
-        time.sleep(0.005)
-    if current:
-        chunks.append(current)
-    return "\n".join(chunks)
+    """Remove bracketed markers while preserving pasted content."""
+    return strip_paste_markers(text)
 
 
 def _capture_prompt(line: str) -> str:
-    """Turn one console line plus any buffered paste into a task string."""
-    text = _clean_paste(line)
-    if text.lower() in {"exit", "quit"} or text.lower().startswith(("/file ", "/export")):
-        return text
-    if text.lower() == "/paste":
-        return "/paste"
-    return _clean_paste(_drain_windows_paste(line))
+    """Turn one console entry into a task string without altering pastes."""
+    if _BRACKETED_PASTE_START in line or _BRACKETED_PASTE_END in line:
+        text = compose_stream(line).submit()
+    else:
+        text = line
+    probe = text.strip()
+    if not probe:
+        return ""
+    if (
+        probe.lower() in {"exit", "quit", "/paste"}
+        or probe.lower().startswith(("/file ", "/export"))
+    ):
+        return probe
+    return text.rstrip("\r\n")
 
 
 def _read_multiline(
@@ -673,7 +785,9 @@ def _read_multiline(
         if line.strip() in PASTE_TERMINATORS:
             break
         lines.append(line)
-    text = "\n".join(lines).strip()
+    text = "\n".join(lines)
+    if not text.strip():
+        return ""
     return text if len(text) <= MAX_PROMPT_CHARS else ""
 
 

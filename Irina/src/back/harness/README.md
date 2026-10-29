@@ -4,10 +4,12 @@ The harness runs one conversation from start to finish. It asks the model for a
 reply, runs any tools the model asks for, and stops for a clear reason.
 
 The loop is deliberately small. Day 1 added one model adapter and a dice demo;
-Day 2 added six workspace tools and an OpenShell sandbox. Stage 2 added context
-compaction, durable memory, and skills. Stage 3 added durable sessions, truthful
-crash repair, sequential sub-agents, and the central `Harness`. Stage 4 adds the
-interactive/headless CLI, parallel fleet execution, and artifact download.
+Day 2 added six core workspace tools and an OpenShell sandbox. Later stages added
+18 web, document, and data tools in the same registry, plus collapsible paste
+input. Stage 2 added context compaction, durable memory, and skills. Stage 3
+added durable sessions, truthful crash repair, sequential sub-agents, and the
+central `Harness`. Stage 4 adds the interactive/headless CLI, parallel fleet
+execution, and artifact download.
 
 ## Files
 
@@ -24,6 +26,7 @@ interactive/headless CLI, parallel fleet execution, and artifact download.
 | `utils/markdown.py` | Incremental Markdown presentation. |
 | `utils/renderer.py` | Streaming event renderer and progress indicator. |
 | `utils/fleet.py` | Serialized, job-prefixed concurrent fleet output. |
+| `utils/paste.py` | Presentation-only collapsing of large pasted input. |
 | `context_management/memory/` | Canonical experience history, EvolveLab adapter, registry, replay, evolution/evaluation bridges. |
 | `memory/upstream/memevolve/` | Vendored original MemEvolve/EvolveLab source at the recorded commit. |
 | `loop/runner.py` | Runs turns, handles tool calls, emits events. |
@@ -31,7 +34,7 @@ interactive/headless CLI, parallel fleet execution, and artifact download.
 | `loop/termination.py` | Sets limits for turns, tools, time, tokens, repeats, and failures. |
 | `providers/base.py` | Defines what a provider must implement and the shared data types. |
 | `providers/deepseek.py` | Talks to the DeepSeek Chat Completions API. |
-| `tools_and_guardrails/` | Six workspace tools, permission policy, shell, and OpenShell adapter. |
+| `tools_and_guardrails/` | Six core tools plus 18 web/document/data tools, permission policy, shell, and OpenShell adapter. |
 | `context_management/` | Compaction, task state, `IRINA.md` memory, and skills. |
 
 ## How a run works
@@ -88,9 +91,11 @@ Unknown tools, bad arguments, and tool exceptions become error results. They do
 not crash the run. Every tool call gets exactly one matching tool result before
 the next model request.
 
-Day 2 uses `tools_and_guardrails/` for its six tools. The caller passes
-`Policy.check` as the `before_tool` hook, and the demo runs the tools inside
-OpenShell. The loop itself is unchanged.
+Day 2 uses `tools_and_guardrails/` for its six core tools. `Harness` also
+registers the 18 extended web/document/data tools in the same registry, so the
+model sees one tool surface. The caller passes `Policy.check` as the
+`before_tool` hook, and the demo runs the tools inside OpenShell. The loop itself
+is unchanged.
 
 ## Stage 3: sessions, crash recovery, and sub-agents
 
@@ -289,8 +294,8 @@ python demos/stage5_streaming.py --live --plain
 - Safe write: visibly blocked; `false`: visibly failed; `--plain`: no ANSI.
 - Controlled cancellation: session status `interrupted`, zero tools executed.
 - Fleet display: serialized prefixed output in the synthetic demo.
-- Offline suite: **316 tests, OK (2 skipped)**, including memory finalization and
-  logging coverage.
+- Offline suite: **352 tests, OK (3 skipped)**, including memory finalization,
+  extended tools, and collapsible paste coverage.
 
 ## Stage 6: EvolveLab and canonical memory
 
@@ -384,7 +389,7 @@ still defaults to `gpt-4o-mini`.
 
 - [Loop](loop/README.md) - turn order, completion rules, events.
 - [Providers](providers/README.md) - model adapter and retries.
-- [Tools and guardrails](tools_and_guardrails/README.md) - six tools, policy, OpenShell.
+- [Tools and guardrails](tools_and_guardrails/README.md) - core and extended tools, policy, OpenShell.
 - [Context, memory, skills](context_management/README.md) - compaction, task state, `IRINA.md`, `SKILL.md`.
 - [Memory and evolution](context_management/memory/README.md) - lifecycle, providers, replay, evolution, safety, logging.
 - [Stage 3 sub-agent demo](../../../demos/stage3_subagents.py) - deterministic sequential delegation.

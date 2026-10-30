@@ -7,6 +7,7 @@ import os
 import tempfile
 import time
 import unittest
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 
@@ -151,6 +152,28 @@ class LayaRouterTests(unittest.TestCase):
         self.assertEqual(decision.spec, self.candidates[0])
         self.assertIn("RuntimeError", router.last_diagnostic["reason"])
 
+    def test_checkpoint_temperature_warning_is_suppressed(self) -> None:
+        from src.back.harness.routing.laya_router import (
+            _quiet_checkpoint_temperature_warning,
+        )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with _quiet_checkpoint_temperature_warning():
+                warnings.warn(
+                    "laya: this checkpoint ships invalid temperatures or values "
+                    "outside [0.5, 5]; using choice:11+=0.10058280825614929 -> "
+                    "0.5. Treat confidence from the affected entries as "
+                    "uncalibrated.",
+                    RuntimeWarning,
+                )
+                warnings.warn("unrelated runtime problem", RuntimeWarning)
+        messages = [str(item.message) for item in caught]
+        self.assertFalse(
+            any("invalid temperatures" in message for message in messages)
+        )
+        self.assertTrue(any("unrelated runtime problem" in m for m in messages))
+
     def test_invalid_choice_uses_fallback(self) -> None:
         router = LayaRouter(timeout_seconds=2)
 
@@ -162,6 +185,70 @@ class LayaRouterTests(unittest.TestCase):
         decision = router.select("task", "", self.candidates, self.candidates[2])
         self.assertTrue(decision.fallback)
         self.assertEqual(decision.spec, self.candidates[2])
+
+    def test_calibration_path_is_passed_to_laya(self) -> None:
+        import sys
+        import types
+
+        captured: dict = {}
+
+        class FakeRouter:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        fake = types.ModuleType("laya")
+        fake.Router = FakeRouter  # type: ignore[attr-defined]
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False
+        ) as handle:
+            handle.write("{}")
+            path = Path(handle.name)
+        self.addCleanup(lambda: path.unlink(missing_ok=True))
+        with patch.dict(
+            os.environ, {"IRINA_LAYA_CALIBRATION": str(path)}, clear=False
+        ), patch.dict(sys.modules, {"laya": fake}):
+            router = LayaRouter()
+            router._silence_checkpoint_download_progress = lambda: None
+            router._ensure_router()
+        self.assertEqual(captured["device"], "cpu")
+        self.assertEqual(
+            captured["agent_kwargs"]["calibration"], str(path.resolve())
+        )
+
+    def test_missing_calibration_file_is_refused(self) -> None:
+        import sys
+        import types
+
+        fake = types.ModuleType("laya")
+        fake.Router = lambda **kwargs: object()  # type: ignore[attr-defined]
+        missing = Path(tempfile.gettempdir()) / "irina-missing-calibration.json"
+        with patch.dict(
+            os.environ, {"IRINA_LAYA_CALIBRATION": str(missing)}, clear=False
+        ), patch.dict(sys.modules, {"laya": fake}):
+            router = LayaRouter()
+            router._silence_checkpoint_download_progress = lambda: None
+            with self.assertRaises(RuntimeError):
+                router._ensure_router()
+
+    def test_no_calibration_keeps_plain_router_arguments(self) -> None:
+        import sys
+        import types
+
+        captured: dict = {}
+
+        class FakeRouter:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        fake = types.ModuleType("laya")
+        fake.Router = FakeRouter  # type: ignore[attr-defined]
+        with patch.dict(
+            os.environ, {"IRINA_LAYA_CALIBRATION": ""}, clear=False
+        ), patch.dict(sys.modules, {"laya": fake}):
+            router = LayaRouter()
+            router._silence_checkpoint_download_progress = lambda: None
+            router._ensure_router()
+        self.assertNotIn("agent_kwargs", captured)
 
     def test_timeout_uses_fallback(self) -> None:
         router = LayaRouter(timeout_seconds=0.2)

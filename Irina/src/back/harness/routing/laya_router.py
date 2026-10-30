@@ -3,17 +3,48 @@
 Laya is loaded lazily and only on the trusted host. The router chooses one
 catalog model identifier; it never generates tool arguments, executes tools, or
 changes security policy.
+
+``IRINA_LAYA_CALIBRATION`` may name a calibration JSON produced by
+``laya.save_calibration``. Laya applies it after the checkpoint config, so it is
+the supported way to replace a shipped calibration table that contains an
+out-of-range temperature. A missing path is refused instead of silently routing
+with uncalibrated confidence.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
 import time
+import warnings
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Iterator
 
 from ..providers.catalog import ModelSpec
+
+# The shipped ``convaiinnovations/laya`` checkpoint stores one calibration entry
+# (``choice:11+``) outside Laya's accepted temperature range [0.5, 5]. Laya
+# clamps it to 0.5 and warns that the confidence from that bucket is
+# uncalibrated. The clamp is the only defensible value without refitting on
+# labelled data, so the effective behaviour is already correct; this pattern
+# only silences the unactionable artifact warning.
+_CHECKPOINT_TEMPERATURE_WARNING = (
+    r"laya: this checkpoint ships invalid temperatures.*"
+)
+
+
+@contextlib.contextmanager
+def _quiet_checkpoint_temperature_warning() -> Iterator[None]:
+    """Suppress Laya's shipped-checkpoint temperature warning only."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=_CHECKPOINT_TEMPERATURE_WARNING,
+            category=RuntimeWarning,
+        )
+        yield
 
 
 @dataclass(frozen=True)
@@ -36,7 +67,13 @@ class LayaRouter:
         enabled: bool | None = None,
         timeout_seconds: float | None = None,
         device: str = "cpu",
+        calibration: str | None = None,
     ) -> None:
+        if calibration is None:
+            calibration = (
+                os.environ.get("IRINA_LAYA_CALIBRATION", "").strip() or None
+            )
+        self.calibration = calibration
         if enabled is None:
             enabled = (os.environ.get("IRINA_LAYA_ENABLED", "true").strip().lower()
                        not in {"0", "false", "no", "off"})
@@ -57,19 +94,49 @@ class LayaRouter:
         self._warmed = False
         self.last_diagnostic: dict[str, Any] = {}
 
+    @staticmethod
+    def _silence_checkpoint_download_progress() -> None:
+        """Keep Hugging Face download bars out of the console.
+
+        Laya downloads its checkpoint through ``huggingface_hub``, which prints
+        "Fetching ...", "Download complete", and "Reconstruction complete" bars.
+        The environment variable covers a not-yet-imported hub module; the helper
+        covers a hub that is already imported, since it is read at import time.
+        """
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        try:
+            from huggingface_hub.utils import disable_progress_bars
+
+            disable_progress_bars()
+        except Exception:
+            pass
+
     def _ensure_router(self) -> Any:
         if self._router is not None:
             return self._router
         with self._lock:
             if self._router is not None:
                 return self._router
+            self._silence_checkpoint_download_progress()
             try:
                 from laya import Router  # type: ignore
             except Exception as exc:
                 raise RuntimeError(
                     f"Laya is not installed or cannot be imported: {type(exc).__name__}"
                 ) from None
-            self._router = Router(device=self.device)
+            kwargs: dict[str, Any] = {"device": self.device}
+            if self.calibration:
+                path = Path(self.calibration).expanduser()
+                if not path.is_file():
+                    raise RuntimeError(
+                        "IRINA_LAYA_CALIBRATION does not name a file: "
+                        f"{path}"
+                    )
+                # Laya applies a calibration file after the checkpoint config,
+                # replacing temperature, temperature_by_options, and binning_map.
+                kwargs["agent_kwargs"] = {"calibration": str(path.resolve())}
+            with _quiet_checkpoint_temperature_warning():
+                self._router = Router(**kwargs)
             return self._router
 
     def _criteria(self, candidates: list[ModelSpec]) -> dict[str, str]:
@@ -129,7 +196,10 @@ class LayaRouter:
         def run() -> None:
             try:
                 router = self._ensure_router()
-                holder["value"] = router.predict(state, questions)
+                # The checkpoint is built lazily on the first predict, so the
+                # shipped-config warning is emitted here, not at construction.
+                with _quiet_checkpoint_temperature_warning():
+                    holder["value"] = router.predict(state, questions)
             except BaseException as exc:  # noqa: BLE001 - routed as a fallback
                 error.append(exc)
 

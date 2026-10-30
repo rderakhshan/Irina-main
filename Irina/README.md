@@ -270,6 +270,8 @@ IRINA_FALLBACK_PROVIDER=deepseek
 IRINA_LAYA_ENABLED=true
 IRINA_LAYA_DEVICE=cpu
 IRINA_LAYA_TIMEOUT_SECONDS=10
+# Optional refitted calibration JSON; replaces the checkpoint's shipped one.
+IRINA_LAYA_CALIBRATION=
 ```
 
 Only providers with credentials are candidates. A selected provider/model stays

@@ -23,8 +23,9 @@ execution, and artifact download.
 | `__main__.py` | `python -m src.back.harness` entry point. |
 | `utils/theme.py` | Semantic terminal colors, symbols, and capability detection. |
 | `utils/formatting.py` | Redaction, safe display, previews, durations, and token formatting. |
-| `utils/markdown.py` | Incremental Markdown presentation. |
-| `utils/renderer.py` | Streaming event renderer and progress indicator. |
+| `utils/rich_markdown.py` | Rich Markdown documents, live streaming, tables, and syntax highlighting. |
+| `utils/markdown.py` | Line-oriented Markdown fallback for plain and redirected output. |
+| `utils/renderer.py` | Streaming event renderer, tool presentation, and progress indicator. |
 | `utils/fleet.py` | Serialized, job-prefixed concurrent fleet output. |
 | `utils/paste.py` | Presentation-only collapsing of large pasted input. |
 | `context_management/memory/` | Canonical experience history, EvolveLab adapter, registry, replay, evolution/evaluation bridges. |
@@ -280,8 +281,12 @@ call can execute. `Harness` records an interrupted stream as `interrupted`, not
 - `theme.py`: semantic colors, Unicode/ASCII symbols, TTY/capability detection.
 - `formatting.py`: redaction, terminal-control stripping, path/args/clip/duration/
   token formatting, result previews, and the bounded cross-chunk redactor.
-- `markdown.py`: incremental headings, lists, code fences, tables, and inline
-  code without full-document buffering.
+- `rich_markdown.py`: assistant responses rendered as Rich Markdown documents
+  (headings, lists, blockquotes, tables, syntax-highlighted code, OSC-8 links)
+  through one `Console`; throttled `Live` repaint while streaming, append-only
+  block rendering past `MAX_LIVE_CHARS`, and one final render.
+- `markdown.py`: line-oriented headings, lists, code fences, tables, and inline
+  code for plain or redirected output where box drawing is unavailable.
 - `renderer.py`: streaming text, tool start/success/failure/blocked, compaction,
   cancellation, errors, progress indicators, and completion summary.
 - `fleet.py`: thread-safe, job-prefixed fleet output.
@@ -390,10 +395,12 @@ automated. `artisan-coffee` and `viper` ended at `token_budget` before a complet
 review, although their static checks passed.
 
 Stage 5 limits: streaming is synchronous and single-stream per Harness; there is
-no provider-side cancellation token beyond closing the connection. Markdown is
-streamed with line/structural buffering, not a full terminal Markdown renderer.
-The cross-chunk redactor is bounded and documented; it does not claim absolute
-secret detection. Streaming usage is zero when the provider omits usage rather
+no provider-side cancellation token beyond closing the connection. On a Unicode
+TTY, assistant text is rendered as Rich Markdown with a throttled live repaint
+and append-only blocks for long responses; plain or redirected output uses the
+line-oriented fallback, so tables there stay as readable aligned text rather
+than boxes. The cross-chunk redactor is bounded and documented; it does not
+claim absolute secret detection. Streaming usage is zero when the provider omits usage rather
 than being invented.
 
 Stage 6 limits: only tested providers are claimed integrated; optional research

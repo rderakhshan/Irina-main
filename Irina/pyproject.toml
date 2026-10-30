@@ -8,6 +8,7 @@ dependencies = [
     "pip>=26.2.2",
     "torch>=2.0",
     "laya==0.4.15",
+    "rich>=13.0",
 ]
 
 [project.optional-dependencies]

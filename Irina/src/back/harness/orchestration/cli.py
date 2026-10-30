@@ -538,7 +538,7 @@ def _run_headless(
     try:
         result = harness.run(prompt)
     except KeyboardInterrupt:
-        renderer.stop_progress()
+        renderer.interrupt()
         print(
             "\nRun interrupted. Session log is safe.",
             file=sys.stderr,
@@ -934,7 +934,7 @@ def _run_interactive(
                 else:
                     result = harness.continue_task(task)
             except KeyboardInterrupt:
-                renderer.stop_progress()
+                renderer.interrupt()
                 print(
                     "\nRun interrupted. Session log is safe.",
                     file=sys.stderr,

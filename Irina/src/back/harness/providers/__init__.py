@@ -24,13 +24,23 @@ from .base import (
     ToolCall,
 )
 from .deepseek import API_ROOT, DEFAULT_MODEL, DeepSeekProvider
+from .gemini import GeminiProvider
+from .openai import OpenAIProvider
+from .catalog import ModelCatalog, ModelConfigurationError, ModelSpec
+from .factory import ProviderFactory
 
 __all__ = [
     "API_ROOT",
     "DEFAULT_MODEL",
     "DeepSeekProvider",
+    "GeminiProvider",
+    "ModelCatalog",
+    "ModelConfigurationError",
+    "ModelSpec",
+    "OpenAIProvider",
     "Provider",
     "ProviderError",
+    "ProviderFactory",
     "ProviderHTTPError",
     "ProviderInvalidResponse",
     "ProviderResponse",

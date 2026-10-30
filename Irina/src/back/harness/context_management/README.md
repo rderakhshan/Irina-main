@@ -221,8 +221,9 @@ python -m unittest tests.test_context tests.test_memory tests.test_skills tests.
 python demos/stage2_context_memory_skills.py
 ```
 
-Current full offline suite: **352 tests, OK** with 3 skips (two Windows symlink
-checks and one optional ExpeL dependency check). The live Stage 2
+Current full offline suite: **378 tests, OK** with 4 skips (two Windows symlink
+checks, one optional ExpeL dependency check, and the opt-in live Laya test). The
+live Stage 2
 demo passed:
 
 - **A:** five files, correct manifest, independent `wc -l` check, three

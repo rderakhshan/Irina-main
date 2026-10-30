@@ -125,6 +125,7 @@ class TerminalRenderer:
         self._run_started: float | None = None
         self._at_line_start = True
         self.memory_verbose = False
+        self.verbose = False
 
     # -- basic output -------------------------------------------------
     def _write(self, text: str = "") -> None:
@@ -238,6 +239,22 @@ class TerminalRenderer:
 
     # -- event handling -----------------------------------------------
     def __call__(self, event: RunEvent) -> None:
+        if event.type is EventType.MODEL:
+            self._progress.stop()
+            self._flush_assistant()
+            self._line(
+                f"  {self.theme.paint('dim', 'model')}  "
+                f"{self.theme.paint('tool', one_line(f'{event.provider}:{event.model}', 80))}  "
+                f"{self.theme.paint('dim', f'({event.routing_mode})')}"
+            )
+            if self.verbose and event.routing_reason:
+                self._line(
+                    self.theme.paint(
+                        "dim", "       " + one_line(event.routing_reason, 160)
+                    )
+                )
+            return
+
         if event.type is EventType.ASSISTANT_DELTA:
             self._progress.stop()
             if not event.text:

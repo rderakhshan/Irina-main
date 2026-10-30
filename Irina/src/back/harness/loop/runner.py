@@ -51,6 +51,7 @@ class EventType(str, Enum):
 
     ASSISTANT = "assistant"
     ASSISTANT_DELTA = "assistant_delta"
+    MODEL = "model"
     MEMORY = "memory"
     TOOL_START = "tool_start"
     TOOL_END = "tool_end"
@@ -81,6 +82,11 @@ class RunEvent:
         memory_phase: Memory phase, such as retrieve or update.
         memory_count: Number of retrieved/updated items, when measured.
         memory_ok: Whether the memory operation succeeded, when known.
+        provider: Selected provider name for ``MODEL`` events.
+        model: Selected provider model for ``MODEL`` events.
+        model_id: Catalog identifier for ``MODEL`` events.
+        routing_mode: ``auto``, ``manual``, or ``default``.
+        routing_reason: Credential-free routing explanation.
     """
 
     type: EventType
@@ -101,6 +107,11 @@ class RunEvent:
     memory_phase: str = ""
     memory_count: int | None = None
     memory_ok: bool | None = None
+    provider: str = ""
+    model: str = ""
+    model_id: str = ""
+    routing_mode: str = ""
+    routing_reason: str = ""
 
 
 def _emit(
@@ -144,6 +155,8 @@ def _append_assistant(
 ) -> None:
     """Append the neutral assistant message for this provider response."""
     message: dict[str, Any] = {"role": "assistant", "text": response.text}
+    if response.continuation:
+        message["provider_state"] = response.continuation
     if response.tool_calls:
         entries: list[dict[str, Any]] = []
         for call in response.tool_calls:
@@ -441,6 +454,7 @@ def _consume_stream(
     accumulators: dict[int, dict[str, str]] = {}
     finish_reason = ""
     usage: TokenUsage | None = None
+    continuation: dict[str, Any] | None = None
 
     for event in stream_method(model, system, messages, specs):
         if not isinstance(event, ProviderStreamEvent):
@@ -481,6 +495,7 @@ def _consume_stream(
         elif event.type is StreamEventType.FINISH:
             finish_reason = event.finish_reason
             usage = event.usage
+            continuation = event.continuation
         elif event.type is StreamEventType.ERROR:
             raise ProviderStreamError(event.error or "provider stream failed")
         else:
@@ -501,6 +516,7 @@ def _consume_stream(
         tool_calls=tool_calls,
         finish_reason=finish_reason,
         usage=usage or TokenUsage(0, 0),
+        continuation=continuation,
     )
 
 

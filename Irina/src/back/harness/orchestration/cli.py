@@ -144,7 +144,19 @@ def build_parser() -> argparse.ArgumentParser:
         "-m",
         "--model",
         default=None,
-        help="Model override. Defaults to the provider or IRINA_MODEL.",
+        help=(
+            "Model override. A model with --provider auto is a manual override; "
+            "otherwise it selects the provider model or catalog entry."
+        ),
+    )
+    parser.add_argument(
+        "--provider",
+        default=None,
+        metavar="PROVIDER",
+        help=(
+            "Provider selection: auto (Laya), default (configured default), "
+            "deepseek, openai, or gemini. Manual selection overrides auto."
+        ),
     )
     parser.add_argument(
         "--mode",
@@ -310,6 +322,11 @@ class EventPrinter:
         return f"  | {text}"
 
     def __call__(self, event: RunEvent) -> None:
+        if event.type is EventType.MODEL:
+            self._write(
+                f"  model {event.provider}:{event.model} ({event.routing_mode})"
+            )
+            return
         if event.type is EventType.ASSISTANT:
             if event.text.strip():
                 self._write(redact_secrets(event.text))
@@ -387,6 +404,7 @@ def build_harness(
     return Harness(
         workdir=args.workdir,
         model=args.model,
+        provider_mode=getattr(args, "provider", None),
         policy=policy,
         on_event=on_event,
         max_turns=args.max_turns,
@@ -666,7 +684,7 @@ def _read_windows_console_line(prompt: str) -> str:
                             composer.add_typed("\n")
                             write("\n")
                             ends_with_enter = True
-                    elif char == "\x08":
+                    elif char in {"\x08", "\x7f"}:
                         ends_with_enter = _flush_burst(composer, burst, write)
                         removed = composer.backspace()
                         if removed:
@@ -820,14 +838,14 @@ def _run_interactive(
         args.renderer = renderer
     if not getattr(args, "_irina_banner", False):
         renderer.banner(
-            model=harness.model,
+            model=getattr(harness, "model_label", harness.model),
             workspace=harness.workspace,
             mode=harness.policy.mode,
             session=str(harness.session_path) if harness.session_path else None,
         )
         renderer.info(
             "Type a task, /paste for multi-line text, /file <path>, "
-            "/export, or 'exit'."
+            "/model, /export, or 'exit'."
         )
         args._irina_banner = True
 
@@ -848,6 +866,33 @@ def _run_interactive(
                 continue
             if task.lower() in {"exit", "quit"}:
                 break
+            if task.lower() == "/model" or task.lower().startswith("/model "):
+                try:
+                    parts = task.split()
+                    if len(parts) == 1:
+                        renderer.info(
+                            f"Model: {harness.model_label} "
+                            f"(routing: {harness.routing_mode})"
+                        )
+                    elif parts[1].lower() in {"auto", "default"}:
+                        label = harness.set_model(mode=parts[1].lower())
+                        renderer.info(f"Model: {label}")
+                    elif parts[1].lower() in {"deepseek", "openai", "gemini"}:
+                        label = harness.set_model(
+                            provider_name=parts[1].lower(),
+                            model=parts[2] if len(parts) > 2 else None,
+                        )
+                        renderer.info(f"Model: {label}")
+                    else:
+                        label = harness.set_model(
+                            model=parts[1],
+                        )
+                        renderer.info(f"Model: {label}")
+                except Exception as exc:
+                    renderer.error(
+                        f"Model selection failed: {type(exc).__name__}: {exc}"
+                    )
+                continue
             if task.lower() in {"/export", "/export force"}:
                 force = task.lower().endswith(" force")
                 try:
@@ -968,6 +1013,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args.renderer = renderer
     renderer.memory_verbose = bool(args.verbose)
+    renderer.verbose = bool(args.verbose)
     policy = build_policy(
         args,
         interactive=interactive,
@@ -1046,7 +1092,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 2
         renderer.banner(
-            model=harness.model,
+            model=getattr(harness, "model_label", harness.model),
             workspace=workspace,
             mode=harness.policy.mode,
             session=(
@@ -1055,7 +1101,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         renderer.info(
             "Type a task, /paste for multi-line text, /file <path>, "
-            "/export, or 'exit'."
+            "/model, /export, or 'exit'."
         )
         args._irina_banner = True
         return _run_interactive(harness, args)

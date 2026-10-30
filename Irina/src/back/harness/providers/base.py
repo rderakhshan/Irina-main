@@ -72,12 +72,17 @@ class ProviderResponse:
         tool_calls: Tool invocations requested by the model, in order.
         finish_reason: Provider finish reason, preserved verbatim.
         usage: Token usage reported for this request.
+        continuation: Optional opaque provider state that must be echoed back
+            with the next request (for example Gemini thought signatures or an
+            OpenAI response chain). The harness stores it on the neutral
+            assistant message as ``provider_state``; it never interprets it.
     """
 
     text: str
     tool_calls: list[ToolCall]
     finish_reason: str
     usage: TokenUsage
+    continuation: dict[str, Any] | None = None
 
 
 class StreamEventType(str, Enum):
@@ -108,6 +113,7 @@ class ProviderStreamEvent:
         finish_reason: Provider finish reason for ``FINISH``.
         usage: Provider-reported usage for ``FINISH``, or ``None`` when absent.
         error: Credential-free error description for ``ERROR``.
+        continuation: Opaque provider state to carry into the next request.
     """
 
     type: StreamEventType
@@ -119,6 +125,7 @@ class ProviderStreamEvent:
     finish_reason: str = ""
     usage: TokenUsage | None = None
     error: str = ""
+    continuation: dict[str, Any] | None = None
 
 
 class StreamingProvider(Protocol):

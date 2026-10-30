@@ -15,6 +15,7 @@ Design constraints:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -32,11 +33,20 @@ from ..context_management.skills import (
     skill_tools,
     sync_skill_drafts,
 )
-from ..loop.runner import RunEvent, run_loop
+from ..loop.runner import EventType, RunEvent, run_loop
 from ..loop.state import RunResult
 from ..loop.termination import TerminationPolicy
 from ..providers.base import Provider
-from ..providers.deepseek import DEFAULT_MODEL, DeepSeekProvider
+from ..providers.catalog import (
+    PROVIDERS,
+    ModelCatalog,
+    ModelConfigurationError,
+    ModelSpec,
+    selected_provider_from_env,
+)
+from ..providers.deepseek import DEFAULT_MODEL
+from ..providers.factory import ProviderFactory
+from ..routing.laya_router import LayaRouter, RoutingDecision, get_laya_router
 from .session import (
     SessionData,
     SessionError,
@@ -76,6 +86,11 @@ class Harness:
         persist: Create/append a durable top-level session.
         _depth: Internal agent depth; children are greater than zero.
         provider: Optional injected provider (tests or alternate adapter).
+        provider_name: Optional explicit provider name for manual selection.
+        provider_mode: ``auto``, ``default``, ``manual``, or a provider name.
+        model_catalog: Optional pre-built catalog.
+        laya_router: Optional router instance; defaults to the process-wide lazy
+            Laya router.
         workspace_backend: Optional existing workspace/sandbox backend.
         sandbox: Optional existing OpenShell sandbox.
         sandbox_workspace: Workspace name inside a new sandbox.
@@ -124,6 +139,10 @@ class Harness:
         _depth: int = 0,
         *,
         provider: Provider | None = None,
+        provider_name: str | None = None,
+        provider_mode: str | None = None,
+        model_catalog: ModelCatalog | None = None,
+        laya_router: LayaRouter | None = None,
         workspace_backend: Any | None = None,
         sandbox: OpenShellSandbox | None = None,
         sandbox_workspace: str | None = None,
@@ -155,12 +174,26 @@ class Harness:
         sandbox_policy: str | Path | None = None,
     ) -> None:
         self.workdir = str(Path(workdir).resolve())
-        self.provider = provider or DeepSeekProvider()
-        self.model = (
-            model
-            or getattr(self.provider, "default_model", None)
-            or DEFAULT_MODEL
-        )
+        self._provider_override = provider
+        self._model_catalog = model_catalog
+        self._factory: ProviderFactory | None = None
+        self._laya = laya_router
+        self._routing_mode = "manual"
+        self.provider = provider
+        self.provider_name = provider_name or ("custom" if provider else "")
+        self.model_spec: ModelSpec | None = None
+        self.last_routing: RoutingDecision | None = None
+        self.stream = bool(stream)
+        self.memory = memory_manager
+        if provider is not None:
+            self.model = (
+                model
+                or getattr(provider, "default_model", None)
+                or DEFAULT_MODEL
+            )
+        else:
+            self.model = ""
+            self._configure_initial_provider(provider_mode, provider_name, model)
         if isinstance(policy, str):
             policy = Policy(policy)
         self.policy = policy or Policy("safe")
@@ -172,8 +205,6 @@ class Harness:
         self.max_seconds = max_seconds
         self.max_tool_calls = max_tool_calls
         self.max_total_tokens = max_total_tokens
-        self.stream = bool(stream)
-        self.memory = memory_manager
         self._memory_context = ""
         self._run_index = 0
         self._completion_validator = completion_validator
@@ -271,6 +302,216 @@ class Harness:
                     "extra tools must use the existing Tool interface"
                 )
         return values
+
+    @staticmethod
+    def _normalise_routing_mode(mode: str | None) -> str:
+        raw = (mode or os.environ.get("IRINA_PROVIDER") or "auto").strip().lower()
+        if raw in {"auto", "default", "manual"}:
+            return raw
+        if raw in PROVIDERS:
+            return "manual"
+        raise ModelConfigurationError(
+            "provider must be auto, default, manual, deepseek, openai, or gemini"
+        )
+
+    def _configure_initial_provider(
+        self,
+        provider_mode: str | None,
+        provider_name: str | None,
+        model: str | None,
+    ) -> None:
+        """Select an initial provider without invoking Laya.
+
+        Automatic routing still happens at the start of each independent task;
+        this initial choice only gives memory and session metadata a valid
+        provider before the first route.
+        """
+        mode = self._normalise_routing_mode(provider_mode)
+        explicit_provider = (provider_name or "").strip().lower() or None
+        requested = (provider_mode or "").strip().lower()
+        if explicit_provider is None and requested in PROVIDERS:
+            explicit_provider = requested
+        if explicit_provider is None:
+            explicit_provider = selected_provider_from_env()
+        catalog = self._model_catalog or ModelCatalog.from_env()
+        factory = ProviderFactory(catalog)
+        self._model_catalog = catalog
+        self._factory = factory
+
+        if model and mode == "auto" and explicit_provider is None:
+            # An explicit model is a manual override, never an automatic route.
+            mode = "manual"
+        if explicit_provider is not None and mode == "auto":
+            mode = "manual"
+
+        if mode == "manual":
+            spec = factory.resolve_manual(explicit_provider, model)
+        elif mode == "default":
+            spec = factory.require_spec(catalog.configured_default())
+        else:
+            candidates = factory.candidate_specs(
+                require_tools=True, require_streaming=self.stream
+            )
+            if not candidates:
+                raise ModelConfigurationError(
+                    "no model is enabled and configured with credentials; set "
+                    "DEEPSEEK_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY"
+                )
+            try:
+                default_spec = catalog.configured_default()
+            except ModelConfigurationError:
+                default_spec = None
+            if default_spec is not None and default_spec in candidates:
+                spec = default_spec
+            else:
+                spec = candidates[0]
+            factory.require_spec(spec)
+        self._routing_mode = mode
+        self._apply_spec(spec, emit=False)
+
+    def _apply_spec(
+        self,
+        spec: ModelSpec,
+        *,
+        reason: str = "",
+        source: str = "",
+        emit: bool = True,
+    ) -> None:
+        if self._factory is None:
+            raise HarnessError("model selection is not configured")
+        provider = self._factory.get(spec)
+        self.model_spec = spec
+        self.provider = provider
+        self.model = spec.api_model
+        self.provider_name = spec.provider
+        memory_model = getattr(self.memory, "_model", None) if self.memory else None
+        if memory_model is not None:
+            memory_model.provider = provider
+            memory_model.model = self.model
+        if emit:
+            self._emit_model_event(reason=reason, source=source)
+
+    def _emit_model_event(self, *, reason: str, source: str) -> None:
+        if self._user_on_event is None or self.model_spec is None:
+            return
+        try:
+            self._user_on_event(
+                RunEvent(
+                    type=EventType.MODEL,
+                    turn=0,
+                    provider=self.provider_name,
+                    model=self.model,
+                    model_id=self.model_spec.id,
+                    routing_mode=self._routing_mode,
+                    routing_reason=reason,
+                )
+            )
+        except Exception:
+            pass
+
+    def _routing_context(self) -> str:
+        relevant = [
+            message
+            for message in self._messages
+            if message.get("role") in {"user", "assistant"}
+            and str(message.get("text", "")).strip()
+        ]
+        return "\n".join(
+            f"{message['role']}: {str(message.get('text', ''))[:1000]}"
+            for message in relevant[-6:]
+        )
+
+    def _route_model(self, task: str) -> None:
+        """Ask Laya for one configured model at an independent task boundary."""
+        if self._provider_override is not None or self._factory is None:
+            return
+        candidates = self._factory.candidate_specs(
+            require_tools=True, require_streaming=self.stream
+        )
+        fallback = self._factory.resolve_fallback(candidates)
+        router = self._laya or get_laya_router()
+        self._laya = router
+        decision = router.select(
+            task,
+            self._routing_context(),
+            candidates,
+            fallback,
+        )
+        self.last_routing = decision
+        self._routing_mode = "auto"
+        self._apply_spec(
+            decision.spec,
+            reason=decision.reason,
+            source=decision.source,
+        )
+
+    def _maybe_route(self, task: str) -> None:
+        if self._routing_mode != "auto" or self._provider_override is not None:
+            return
+        unfinished = self._session_loaded and self._session_status not in {
+            None,
+            "completed",
+        }
+        if unfinished:
+            return
+        self._route_model(task)
+
+    @property
+    def model_label(self) -> str:
+        """Return the selected provider and API model for display."""
+        return f"{self.provider_name}:{self.model}"
+
+    @property
+    def routing_mode(self) -> str:
+        """Return the current routing mode."""
+        return self._routing_mode
+
+    def set_model(
+        self,
+        *,
+        mode: str | None = None,
+        provider_name: str | None = None,
+        model: str | None = None,
+    ) -> str:
+        """Change model selection for the next task boundary.
+
+        ``mode=auto`` keeps the current model until the next independent task,
+        then Laya selects again. ``mode=default`` applies the configured
+        default. A provider/model argument performs a validated manual switch.
+        """
+        if self._factory is None or self._model_catalog is None:
+            raise HarnessError(
+                "model selection is unavailable for an injected provider"
+            )
+        if mode is not None:
+            normalised = self._normalise_routing_mode(mode)
+            if normalised == "auto":
+                self._routing_mode = "auto"
+                self._emit_model_event(
+                    reason="automatic routing enabled for the next task",
+                    source="auto",
+                )
+                return self.model_label
+            if normalised == "default":
+                spec = self._factory.require_spec(
+                    self._model_catalog.configured_default()
+                )
+                self._routing_mode = "default"
+                self._apply_spec(spec, reason="configured default", source="default")
+                return self.model_label
+            spec = self._factory.resolve_manual(
+                provider_name or selected_provider_from_env(),
+                model,
+            )
+            self._routing_mode = "manual"
+            self._apply_spec(spec, reason="manual selection", source="manual")
+            return self.model_label
+        if provider_name is not None or model is not None:
+            spec = self._factory.resolve_manual(provider_name, model)
+            self._routing_mode = "manual"
+            self._apply_spec(spec, reason="manual selection", source="manual")
+            return self.model_label
+        return self.model_label
 
     @property
     def workspace(self) -> str:
@@ -509,6 +750,7 @@ class Harness:
             persist=False,
             _depth=depth,
             provider=self.provider,
+            provider_name=self.provider_name,
             workspace_backend=self._backend,
             sandbox=self._sandbox,
             sandbox_workspace=self._workspace,
@@ -549,7 +791,13 @@ class Harness:
             state_dir=self._state_dir,
             sandbox_name=getattr(self._sandbox, "name", None),
             sandbox_workspace=self._workspace,
-            metadata={"model": self.model, "harness": "stage3"},
+            metadata={
+                "model": self.model,
+                "provider": self.provider_name,
+                "model_id": self.model_spec.id if self.model_spec else self.model,
+                "routing_mode": self._routing_mode,
+                "harness": "stage3",
+            },
             path=path if path is not None else self._session_path,
         )
         self._session_path = session_path
@@ -709,6 +957,7 @@ class Harness:
             )
 
         self._ensure_ready()
+        self._maybe_route(task)
         self._apply_memory_context(task)
         if self._task_state is None:
             self._task_state = TaskState(goal=task)

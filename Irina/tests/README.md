@@ -17,10 +17,10 @@ $env:IRINA_MEMORY_ENABLED='0'
 python -m unittest discover -s tests -v
 ```
 
-Current full run: **352 tests, OK** (3 skips: two Windows symlink checks and one
-optional ExpeL dependency check). OpenShell integration tests run when the local
-gateway is available and skip when it is not. Stage 4/5/6 live checks are
-separate; see the demo and memory READMEs.
+Current full run: **378 tests, OK** (4 skips: two Windows symlink checks, one
+optional ExpeL dependency check, and the opt-in live Laya test). OpenShell
+integration tests run when the local gateway is available and skip when it is
+not. Stage 4/5/6 live checks are separate; see the demo and memory READMEs.
 
 ## What is covered
 
@@ -78,6 +78,18 @@ separate; see the demo and memory READMEs.
 - collapsed-block backspace and expansion
 - bracketed markers and the burst fallback
 - CLI capture submits the complete original text
+
+`test_providers_routing.py`:
+
+- model catalog defaults, credential filtering, capabilities, and manual lookup
+- Laya valid choice, failure fallback, invalid-choice fallback, and timeout
+- opt-in real CPU Laya selection (`IRINA_LAYA_LIVE=1`)
+- Harness auto routing, follow-up model stability, and manual override
+- model event and session metadata
+- OpenAI Responses complete, streaming, tool calls, malformed args, and missing keys
+- Gemini generateContent complete, streaming, function calls, thought-signature
+  continuation, malformed args, and missing keys
+- `.env` / `.env.example` configuration keys and CLI `--provider` / `--model`
 
 `test_security.py`:
 
@@ -295,6 +307,14 @@ Extended tool and paste checks:
 
 ```powershell
 python -m unittest tests.test_extended_tools tests.test_paste -v
+```
+
+Provider and routing checks:
+
+```powershell
+python -m unittest tests.test_providers_routing -v
+$env:IRINA_LAYA_LIVE='1'
+python -m unittest tests.test_providers_routing.LayaRouterTests.test_real_laya_cpu_selection -v
 ```
 
 Stage 5/6 checks:

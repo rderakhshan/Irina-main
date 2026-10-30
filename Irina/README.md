@@ -47,6 +47,8 @@ vendored EvolveLab/MemEvolve memory system with canonical experience history.
 | Area | What Irina gives you | Entry point |
 | --- | --- | --- |
 | Agent loop | Bounded turns, tokens, time, and tool calls with explicit stop reasons | `harness/loop/` |
+| Providers | DeepSeek, OpenAI Responses, Gemini, catalog/factory | `harness/providers/` |
+| Routing | Laya CPU model selection with manual/default modes | `harness/routing/` |
 | Sandbox | OpenShell execution with non-root user, confined filesystem, denied egress | `harness/tools_and_guardrails/` |
 | Sessions | Append-only history, resume, truthful crash recovery | `harness/orchestration/session.py` |
 | Memory | 13-provider EvolveLab registry, canonical ledger, retrieval/learning hooks | `harness/context_management/memory/` |
@@ -97,7 +99,10 @@ model, and troubleshooting.
 ## What works today
 
 - A bounded loop with explicit stop reasons.
-- A DeepSeek Chat Completions adapter.
+- A DeepSeek Chat Completions adapter, an OpenAI Responses adapter, and a
+  Gemini generateContent adapter.
+- Automatic model routing with Laya on CPU: choose a configured DeepSeek,
+  OpenAI, or Gemini model per independent task, with manual override.
 - Six core workspace tools: read, write, edit, bash, list, and grep.
 - Eighteen web, document, and data tools (search, fetch, HTTP, download, PDF,
   LaTeX, DOCX, XLSX, PPTX, SQL, datasets, and notebooks), all registered in the
@@ -118,8 +123,8 @@ model, and troubleshooting.
   memory, skills, sessions, and OpenShell.
 - An interactive and headless CLI with `safe`, `yolo`, and `read-only` modes,
   session resume, truthful exit codes, and Windows-safe output.
-- Genuine DeepSeek streaming with provider-neutral delta events, safe tool-call
-  assembly, and a streaming/non-streaming compatibility path.
+- Genuine streaming across DeepSeek, OpenAI, and Gemini with provider-neutral
+  delta events, safe tool-call assembly, and a streaming/non-streaming path.
 - A semantic terminal theme, Markdown-aware streaming renderer, progress
   indicators, tool lifecycle display, plain/redirected mode, and serialized
   fleet presentation.
@@ -166,7 +171,7 @@ also passed. Stage 4 produced `taskman/`, `artisan-coffee/`, and `viper/` throug
 real DeepSeek + OpenShell runs. `taskman` completed both build and review with 19
 tests passing. The two web projects met their mechanical checks, but their runs
 ended at `token_budget` before a completed review; browser interaction was not
-automated. The current offline suite is **352 tests, OK (3 skipped)**, including
+automated. The current offline suite is **378 tests, OK (4 skipped)**, including
 the memory integration, finalization, extended-tools, and paste suites.
 
 Memory finalization checks:
@@ -230,7 +235,50 @@ uv run python main.py --memory                              # interactive with m
 ```
 
 Requires Python 3.13 and NVIDIA OpenShell 0.1.5 for sandboxed tool execution.
-Add `DEEPSEEK_API_KEY` to the ignored `.env` file for live model calls.
+Add provider keys to the ignored `.env` file for live model calls. Laya is a
+host dependency and runs on CPU; the first routing decision downloads only the
+selected checkpoint into the Hugging Face cache.
+
+## Model routing
+
+Irina supports three routing modes:
+
+- `auto` — Laya selects one configured model with credentials.
+- `default` — use `IRINA_DEFAULT_PROVIDER` / `IRINA_DEFAULT_MODEL`.
+- `manual` — use `--provider` and `--model`, or `/model` interactively.
+
+```powershell
+python main.py --provider auto      # Laya chooses
+python main.py --provider deepseek  # manual provider
+python main.py --provider openai --model gpt-4.1-mini
+python main.py --provider gemini --model gemini-3.5-flash
+```
+
+At the prompt, `/model` shows the current provider/model and mode. `/model auto`,
+`/model default`, `/model openai`, or `/model gemini gemini-3.5-flash` change it
+for the next task.
+
+Configure provider credentials and defaults in `.env`:
+
+```dotenv
+DEEPSEEK_API_KEY=
+OPENAI_API_KEY=
+GEMINI_API_KEY=
+IRINA_PROVIDER=auto
+IRINA_DEFAULT_PROVIDER=deepseek
+IRINA_FALLBACK_PROVIDER=deepseek
+IRINA_LAYA_ENABLED=true
+IRINA_LAYA_DEVICE=cpu
+IRINA_LAYA_TIMEOUT_SECONDS=10
+```
+
+Only providers with credentials are candidates. A selected provider/model stays
+fixed for the whole agent loop. Follow-ups to an unfinished task keep the current
+model; an independent task may route again. Manual selection always overrides
+automatic routing.
+
+`IRINA_MODEL_CATALOG` can define additional models from any provider; see
+[the provider README](src/back/harness/providers/README.md).
 
 ## Command line
 
@@ -296,6 +344,8 @@ Memory flags:
 
 | Flag | Effect |
 | --- | --- |
+| `--provider <name>` | `auto` (Laya), `default`, `deepseek`, `openai`, or `gemini` |
+| `--model <id>` | Explicit model; with `--provider auto` this is a manual override |
 | `--memory` | Enable canonical experience + the configured EvolveLab provider |
 | `--no-memory` | Disable memory even when configuration enables it |
 | `--memory-provider <id>` | Select an upstream provider explicitly |
@@ -622,6 +672,8 @@ src/back/harness/orchestration/cli.py
                                     Interactive and headless front door
 src/back/harness/orchestration/fleet.py
                                     Parallel isolated jobs and result ordering
+src/back/harness/providers/         DeepSeek, OpenAI, Gemini, catalog, factory
+src/back/harness/routing/           Laya CPU model router
 src/back/harness/utils/             Terminal theme, renderer, Markdown, memory logging, fleet UI
 src/back/harness/context_management/memory/
                                     Canonical experience store, EvolveLab adapters,
@@ -676,6 +728,17 @@ Memory limits:
   it with `memory replay`.
 - `IRINA.md` remains a bounded human-readable project-memory file; the provider
   memory system is separate from it.
+
+Routing limits:
+
+- Laya runs on the trusted host, not in OpenShell. Its first prediction
+  downloads the selected checkpoint into the Hugging Face cache; later runs
+  reuse it. CPU inference is slower than a GPU.
+- Laya chooses only from enabled, credentialed models with the required
+  capabilities. A failure, timeout, or invalid choice uses the configured
+  fallback model.
+- Provider endpoints must be reachable from the host. Credentials are never sent
+  to Laya or the sandbox.
 
 Other limits: there is no queue, distributed worker pool, database, or
 multi-tenant scheduler. Fleet jobs are independent process-level jobs; child

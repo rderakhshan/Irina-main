@@ -34,6 +34,11 @@ execution, and artifact download.
 | `loop/termination.py` | Sets limits for turns, tools, time, tokens, repeats, and failures. |
 | `providers/base.py` | Defines what a provider must implement and the shared data types. |
 | `providers/deepseek.py` | Talks to the DeepSeek Chat Completions API. |
+| `providers/openai.py` | Talks to the OpenAI Responses API. |
+| `providers/gemini.py` | Talks to Gemini generateContent. |
+| `providers/catalog.py` | Configured model catalog, credentials, capabilities, defaults, fallbacks. |
+| `providers/factory.py` | Resolves one catalog model to its adapter. |
+| `routing/laya_router.py` | Lazy CPU Laya router and fallback decisions. |
 | `tools_and_guardrails/` | Six core tools plus 18 web/document/data tools, permission policy, shell, and OpenShell adapter. |
 | `context_management/` | Compaction, task state, `IRINA.md` memory, and skills. |
 
@@ -96,6 +101,24 @@ registers the 18 extended web/document/data tools in the same registry, so the
 model sees one tool surface. The caller passes `Policy.check` as the
 `before_tool` hook, and the demo runs the tools inside OpenShell. The loop itself
 is unchanged.
+
+## Model selection and routing
+
+`providers/` contains the DeepSeek, OpenAI Responses, and Gemini adapters.
+`providers/catalog.py` describes the selectable models from environment
+configuration; `providers/factory.py` creates only the selected adapter.
+
+In `auto` mode, `routing/laya_router.py` runs Laya on CPU, lazily, on the trusted
+host. It chooses one actual configured model id from enabled models with
+credentials and the required tool/streaming capabilities. The choice is fixed
+for the whole agent loop. Follow-ups to an unfinished task keep the current
+model; an independent task can route again. `manual` selection always wins, and
+`default` uses `IRINA_DEFAULT_PROVIDER` / `IRINA_DEFAULT_MODEL`. Laya failure,
+timeout, or an invalid/unconfigured choice falls back to the configured
+fallback model. Laya never receives credentials and never decides tool calls,
+permissions, or execution.
+
+See [providers/README.md](providers/README.md) for catalog and adapter details.
 
 ## Stage 3: sessions, crash recovery, and sub-agents
 
@@ -294,7 +317,7 @@ python demos/stage5_streaming.py --live --plain
 - Safe write: visibly blocked; `false`: visibly failed; `--plain`: no ANSI.
 - Controlled cancellation: session status `interrupted`, zero tools executed.
 - Fleet display: serialized prefixed output in the synthetic demo.
-- Offline suite: **352 tests, OK (3 skipped)**, including memory finalization,
+- Offline suite: **378 tests, OK (4 skipped)**, including memory finalization,
   extended tools, and collapsible paste coverage.
 
 ## Stage 6: EvolveLab and canonical memory

@@ -94,6 +94,9 @@ class ExecutionState:
 
     Attributes:
         messages: The live transcript, shared with the caller.
+        run_messages: Optional run-local collector. When supplied, every
+            assistant and tool message appended during this run is also
+            appended here, independent of transcript compaction.
         turns: Provider calls made.
         tool_calls: Model-requested tool calls processed.
         usage: Accumulated token usage.
@@ -106,6 +109,7 @@ class ExecutionState:
     """
 
     messages: list[dict[str, Any]]
+    run_messages: list[dict[str, Any]] | None = None
     turns: int = 0
     tool_calls: int = 0
     usage: TokenUsage = field(default_factory=lambda: TokenUsage(0, 0))

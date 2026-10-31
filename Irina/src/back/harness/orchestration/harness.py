@@ -805,12 +805,19 @@ class Harness:
         self._session_status = "running"
         self._recorder = SessionRecorder(session_path, self._task_state)
 
-    def resume(self, path: str | Path | None = None) -> bool:
+    def resume(
+        self,
+        path: str | Path | None = None,
+        *,
+        allow_completed: bool = False,
+    ) -> bool:
         """Resume a trusted top-level session for this workspace.
 
         Args:
             path: Optional explicit session path inside the trusted store. With
                 no path, the newest resumable session is used.
+            allow_completed: Load a completed session so an explicit
+                ``continue_task`` can append to it.
 
         Returns:
             ``True`` when a session was loaded and the backend was restored.
@@ -855,7 +862,7 @@ class Harness:
             or data.metadata.get("parent") is not None
         ):
             raise SessionError("child-agent sessions are not top-level sessions")
-        if data.status == "completed":
+        if data.status == "completed" and not allow_completed:
             return False
 
         metadata_workspace = data.metadata.get("sandbox_workspace")
@@ -940,7 +947,13 @@ class Harness:
 
         if self.persist and not self._session_loaded and self._session_path:
             if self._session_path.exists():
-                if not self.resume(self._session_path):
+                # ``resume`` loads the session and reports whether it is
+                # resumable. A completed session is refused for a new task but
+                # allowed for an explicit continuation.
+                loaded = self.resume(
+                    self._session_path, allow_completed=allow_completed
+                )
+                if not loaded and not allow_completed:
                     raise SessionError(
                         "explicit session is completed and cannot be resumed; "
                         "create a new Harness or session"
@@ -1006,6 +1019,11 @@ class Harness:
             max_total_tokens=self.max_total_tokens,
         )
 
+        # Run-local evidence collector. The loop appends each assistant and
+        # tool message here as it is produced, so compaction of the shared
+        # transcript cannot change this run's evidence.
+        run_messages: list[dict[str, Any]] = []
+
         try:
             result = run_loop(
                 provider=self.provider,
@@ -1020,6 +1038,7 @@ class Harness:
                 before_turn=before_turn,
                 should_cancel=self._should_cancel,
                 stream=self.stream,
+                run_messages=run_messages,
             )
         except KeyboardInterrupt as exc:
             if self._recorder is not None:
@@ -1036,10 +1055,15 @@ class Harness:
             self._recorder.record_run_end(result)
         self._session_status = result.status.value
         self._last_result = result
-        self._ingest_memory(task, result)
+        self._ingest_memory(task, result, run_messages)
         return result
 
-    def _ingest_memory(self, task: str, result: RunResult) -> None:
+    def _ingest_memory(
+        self,
+        task: str,
+        result: RunResult,
+        run_messages: list[dict[str, Any]] | None = None,
+    ) -> None:
         """Persist canonical experience and update memory without failing the run."""
         if self.memory is None or self._depth != 0:
             return
@@ -1060,6 +1084,7 @@ class Harness:
                 session_id=session_id,
                 run_index=self._run_index,
                 task_state=self._task_state,
+                run_messages=run_messages,
             )
             result = self.memory.after_task(record)
             if result is not None:

@@ -79,11 +79,15 @@ storage format, or retrieval algorithm; Irina's canonical history does not.
                               next task recalls the lesson
 ```
 
-Two properties matter:
+Three properties matter:
 
-1. **Canonical first.** The experience is written to host-side JSONL before the
+1. **One task, one record.** The loop collects the assistant and tool messages
+   it generates for the current execution, so a continued session does not copy
+   earlier tasks' tool activity into the new experience. The full transcript
+   stays in the session file.
+2. **Canonical first.** The experience is written to host-side JSONL before the
    provider is updated. A provider failure never corrupts or erases the record.
-2. **Evidence, not claims.** `verified_success` is derived from observed bash or
+3. **Evidence, not claims.** `verified_success` is derived from observed bash or
    test output (for example `OK`, `PASSED`, `Ran N tests`, `exit 0`), not from
    the assistant saying it succeeded.
 
@@ -104,7 +108,10 @@ The store is:
 
 - **append-only** and **idempotent** by experience ID;
 - flushed and `fsync`ed per record;
-- bounded per record and per list;
+- bounded per record and per item: individual observations are capped, duplicate
+  observations are dropped, and optional evidence is progressively reduced until
+  the encoded record fits `MAX_RECORD_CHARS` (64,000). Truncation is recorded in
+  `truncated` / `truncated_fields` rather than failing the write;
 - secret-redacted before becoming durable;
 - workspace-isolated;
 - recoverable from a torn final line;

@@ -17,8 +17,10 @@ $env:IRINA_MEMORY_ENABLED='0'
 python -m unittest discover -s tests -v
 ```
 
-Current full run: **378 tests, OK** (4 skips: two Windows symlink checks, one
-optional ExpeL dependency check, and the opt-in live Laya test). OpenShell
+Current full run: **420 tests** (4 skips: two Windows symlink checks, one
+optional ExpeL dependency check, and the opt-in live Laya test). Run with
+`IRINA_MEMORY_ENABLED=0` for CLI tests, which otherwise pick up a developer's
+local memory configuration. OpenShell
 integration tests run when the local gateway is available and skip when it is
 not. Stage 4/5/6 live checks are separate; see the demo and memory READMEs.
 
@@ -248,6 +250,18 @@ not. Stage 4/5/6 live checks are separate; see the demo and memory READMEs.
 - provider `print` output is captured and filtered per memory operation
 - renderer memory notices follow `--verbose`; failed updates stay visible
 - the CLI parser exposes `--verbose`
+
+`test_memory_boundary.py`:
+
+- continued tasks record only the current execution's tool evidence
+- restored sessions keep the correct run scope
+- a task with no tool calls produces a valid record
+- real mid-run compaction does not leak summaries or earlier observations
+- a 100-turn session does not grow the record
+- oversized and duplicated observations are bounded and marked truncated
+- truncation metadata round-trips through the JSONL store
+- a failing memory update does not fail a completed task
+- the MemEvolve payload contains only current-run evidence
 
 `test_streaming.py`:
 

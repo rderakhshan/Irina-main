@@ -110,14 +110,22 @@ def record_from_result(
     run_index: int = 0,
     task_state: Any | None = None,
     verified_success: bool | None = None,
+    run_messages: list[dict[str, Any]] | None = None,
 ) -> ExperienceRecord:
     """Build a canonical record from a final ``RunResult``.
 
     Success is based on observed command/test evidence where possible. It is
     never inferred from the assistant's prose. A completed run without test
     evidence is stored with ``verified_success=False``.
+
+    ``run_messages`` is the run-local evidence collected by the agent loop.
+    When supplied it is authoritative, so continued sessions cannot leak
+    earlier tasks' tool activity into this record. When it is absent the
+    historical behaviour of reading ``result.messages`` is preserved.
     """
-    messages = list(result.messages)
+    messages = (
+        list(run_messages) if run_messages is not None else list(result.messages)
+    )
     actions = _message_calls(messages)
     observations = _message_observations(messages)
     observed_success, test_results = _classify_evidence(observations)

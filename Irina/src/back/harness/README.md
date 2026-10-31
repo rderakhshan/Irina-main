@@ -337,7 +337,10 @@ Irina adds:
 
 - a stable `MemoryBackend` adapter that hides provider paths and schemas;
 - a canonical, append-only experience store with stable IDs, schema versioning,
-  redaction, torn-line recovery, idempotency, and workspace isolation;
+  redaction, torn-line recovery, idempotency, workspace isolation, per-item
+  evidence caps, and marked truncation instead of oversized-record failures;
+- a run-local evidence collector so each experience describes the task that just
+  finished, even when transcript compaction runs mid-task;
 - a trajectory bridge that preserves tool IDs and labels outcomes from observed
   evidence rather than assistant prose;
 - bounded, lower-trust retrieval injection into the system prompt;

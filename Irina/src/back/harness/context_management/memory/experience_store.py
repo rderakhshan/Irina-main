@@ -47,6 +47,10 @@ class ExperienceRecord:
     failure_reason: str | None = None
     run_status: str | None = None
     source_event_references: list[dict[str, Any]] = field(default_factory=list)
+    # Set when persistence had to drop or shorten optional evidence. Defaults
+    # keep older JSONL records loadable through ``from_dict``.
+    truncated: bool = False
+    truncated_fields: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -97,36 +101,154 @@ def stable_experience_id(
     return str(uuid.uuid5(uuid.NAMESPACE_URL, name))
 
 
+ACTION_ARG_CHARS = 4_000
+OBSERVATION_CHARS = 8_000
+EVIDENCE_EXCERPT_CHARS = 800
+MAX_EVIDENCE_ITEMS = 100
+
+
+def _encode_record(data: dict[str, Any]) -> str:
+    """Encode exactly the way persistence does."""
+    return json.dumps(data, ensure_ascii=False, sort_keys=True)
+
+
+def _redact_record(value: Any) -> Any:
+    """Redact every string in the record before it becomes durable."""
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, list):
+        return [_redact_record(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _redact_record(item) for key, item in value.items()}
+    return value
+
+
 def _bounded_record(record: ExperienceRecord) -> dict[str, Any]:
-    data = record.to_dict()
+    """Return a persistable record, reducing optional evidence when needed.
 
-    def clip(value: Any, limit: int = 8_000) -> Any:
-        if isinstance(value, str):
-            return value[:limit]
-        if isinstance(value, list):
-            return value[:100]
-        return value
+    Essential fields (task, outcome, identifiers, status) are never dropped.
+    Tool evidence is capped per item, deduplicated, then progressively halved
+    until the encoded record fits :data:`MAX_RECORD_CHARS`. Every reduction is
+    recorded in ``truncated``/``truncated_fields``.
+    """
+    data = _redact_record(record.to_dict())
+    truncated: set[str] = set()
 
-    data["task_description"] = clip(data["task_description"], 8_000)
-    data["relevant_context"] = clip(data["relevant_context"], 12_000)
-    data["tool_actions"] = clip(data["tool_actions"])
-    data["tool_observations"] = clip(data["tool_observations"])
-    data["test_results"] = clip(data["test_results"])
-    data["source_event_references"] = clip(data["source_event_references"])
-    encoded = json.dumps(data, ensure_ascii=False, sort_keys=True)
-    if len(encoded) > MAX_RECORD_CHARS:
-        raise ExperienceStoreError("experience exceeds the bounded record size")
-    # Redact every string in the record before it becomes durable.
-    def redact(value: Any) -> Any:
-        if isinstance(value, str):
-            return redact_secrets(value)
-        if isinstance(value, list):
-            return [redact(item) for item in value]
-        if isinstance(value, dict):
-            return {str(key): redact(item) for key, item in value.items()}
-        return value
+    def clip(value: Any, limit: int, name: str) -> str:
+        text = str(value or "")
+        if len(text) > limit:
+            truncated.add(name)
+            return text[:limit]
+        return text
 
-    return redact(data)
+    data["task_description"] = clip(
+        data.get("task_description"), 8_000, "task_description"
+    )
+    data["relevant_context"] = clip(
+        data.get("relevant_context"), 12_000, "relevant_context"
+    )
+    if data.get("failure_reason"):
+        data["failure_reason"] = clip(
+            data["failure_reason"], 4_000, "failure_reason"
+        )
+
+    actions: list[dict[str, Any]] = []
+    for action in (data.get("tool_actions") or []):
+        if not isinstance(action, dict):
+            continue
+        item = dict(action)
+        item["args"] = clip(
+            item.get("args"), ACTION_ARG_CHARS, "tool_actions"
+        )
+        actions.append(item)
+    data["tool_actions"] = actions[:MAX_EVIDENCE_ITEMS]
+
+    observations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for observation in (data.get("tool_observations") or []):
+        if not isinstance(observation, dict):
+            continue
+        text = str(observation.get("text") or "")
+        key = " ".join(text.split())
+        if key and key in seen:
+            truncated.add("tool_observations")
+            continue
+        if key:
+            seen.add(key)
+        item = dict(observation)
+        item["text"] = clip(text, OBSERVATION_CHARS, "tool_observations")
+        observations.append(item)
+    data["tool_observations"] = observations[:MAX_EVIDENCE_ITEMS]
+
+    evidence: list[dict[str, Any]] = []
+    for result in (data.get("test_results") or []):
+        if not isinstance(result, dict):
+            continue
+        item = dict(result)
+        if "excerpt" in item:
+            item["excerpt"] = clip(
+                item["excerpt"], EVIDENCE_EXCERPT_CHARS, "test_results"
+            )
+        evidence.append(item)
+    data["test_results"] = evidence[:MAX_EVIDENCE_ITEMS]
+    data["source_event_references"] = list(
+        data.get("source_event_references") or []
+    )[:MAX_EVIDENCE_ITEMS]
+
+    # Progressively halve optional evidence, keeping the most recent entries.
+    def halve(name: str) -> bool:
+        items = data.get(name) or []
+        if not items:
+            return False
+        keep = len(items) // 2
+        data[name] = items[len(items) - keep :] if keep else []
+        truncated.add(name)
+        return True
+
+    reduce_context = ["relevant_context"]
+    task_steps = [8_000, 4_000, 2_000, 500]
+    # Placeholders so the flags themselves count toward the encoded size.
+    data["truncated"] = False
+    data["truncated_fields"] = []
+
+    while len(_encode_record(data)) > MAX_RECORD_CHARS:
+        if halve("tool_observations"):
+            continue
+        if halve("tool_actions"):
+            continue
+        if halve("test_results"):
+            continue
+        if reduce_context:
+            name = reduce_context.pop(0)
+            data[name] = ""
+            truncated.add(name)
+            continue
+        if task_steps:
+            limit = task_steps.pop(0)
+            current = str(data.get("task_description") or "")
+            if len(current) > limit:
+                data["task_description"] = current[:limit]
+                truncated.add("task_description")
+            continue
+        raise ExperienceStoreError(
+            "experience exceeds the bounded record size even after truncation"
+        )
+
+    data["truncated"] = bool(truncated)
+    data["truncated_fields"] = sorted(truncated)
+    # The field names add a few dozen bytes; trim the description if the
+    # record is right at the boundary, then fail honestly.
+    while len(_encode_record(data)) > MAX_RECORD_CHARS:
+        current = str(data.get("task_description") or "")
+        if len(current) <= 200:
+            raise ExperienceStoreError(
+                "experience exceeds the bounded record size even after "
+                "truncation"
+            )
+        data["task_description"] = current[: len(current) - 200]
+        truncated.add("task_description")
+        data["truncated_fields"] = sorted(truncated)
+    return data
 
 
 class ExperienceStore:

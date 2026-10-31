@@ -149,8 +149,17 @@ def _collect_tool_specs(tools: Mapping[str, Any]) -> list[dict[str, Any]]:
     return specs
 
 
+def _record_run_message(
+    state: ExecutionState,
+    message: dict[str, Any],
+) -> None:
+    """Append a message to the run-local collector when one is configured."""
+    if state.run_messages is not None:
+        state.run_messages.append(message)
+
+
 def _append_assistant(
-    messages: list[dict[str, Any]],
+    state: ExecutionState,
     response: ProviderResponse,
 ) -> None:
     """Append the neutral assistant message for this provider response."""
@@ -171,23 +180,24 @@ def _append_assistant(
                     entry["raw_arguments"] = call.raw_arguments
             entries.append(entry)
         message["tool_calls"] = entries
-    messages.append(message)
+    state.messages.append(message)
+    _record_run_message(state, message)
 
 
 def _append_tool_result(
-    messages: list[dict[str, Any]],
+    state: ExecutionState,
     call: ToolCall,
     text: str,
 ) -> None:
     """Append the single tool result owed to one assistant tool call."""
-    messages.append(
-        {
-            "role": "tool",
-            "tool_call_id": call.id,
-            "name": call.name,
-            "text": text,
-        }
-    )
+    message = {
+        "role": "tool",
+        "tool_call_id": call.id,
+        "name": call.name,
+        "text": text,
+    }
+    state.messages.append(message)
+    _record_run_message(state, message)
 
 
 def _execute_tool(
@@ -239,7 +249,7 @@ def _block_calls(
     """Resolve calls that will not execute with explicit blocked results."""
     for call in calls:
         text = f"BLOCKED: {reason}"
-        _append_tool_result(state.messages, call, text)
+        _append_tool_result(state, call, text)
         _emit(
             on_event,
             RunEvent(
@@ -313,7 +323,7 @@ def _process_tool_batch(
             ),
         )
         result, failed = _execute_tool(call, tools, before_tool)
-        _append_tool_result(state.messages, call, result)
+        _append_tool_result(state, call, result)
         state.record_tool_result(failed)
         _emit(
             on_event,
@@ -537,6 +547,7 @@ def run_loop(
     ) = None,
     should_cancel: Callable[[], bool] | None = None,
     stream: bool = False,
+    run_messages: list[dict[str, Any]] | None = None,
 ) -> RunResult:
     """Run the bounded agent loop until completion or an explicit stop.
 
@@ -563,6 +574,9 @@ def run_loop(
             between tool calls.
         stream: Use ``provider.stream`` when available. If the provider has no
             streaming method, this falls back to ``complete``.
+        run_messages: Optional run-local collector. Assistant and tool messages
+            produced by this run are appended to it at generation time, so the
+            collection is unaffected by transcript compaction.
 
     Returns:
         A :class:`RunResult` whose status distinguishes completion from every
@@ -573,7 +587,7 @@ def run_loop(
     """
     policy = policy or TerminationPolicy()
     specs = _collect_tool_specs(tools)
-    state = ExecutionState(messages=messages)
+    state = ExecutionState(messages=messages, run_messages=run_messages)
 
     while True:
         if should_cancel is not None and should_cancel():
@@ -651,7 +665,7 @@ def run_loop(
 
         state.turns += 1
         state.add_usage(response.usage)
-        _append_assistant(state.messages, response)
+        _append_assistant(state, response)
         if response.text.strip():
             state.last_text = response.text
         _emit(

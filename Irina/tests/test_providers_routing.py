@@ -59,7 +59,7 @@ class _ScriptedProvider:
 
 
 class CatalogTests(unittest.TestCase):
-    def test_default_catalog_has_all_three_providers(self) -> None:
+    def test_default_catalog_has_the_enabled_providers(self) -> None:
         with patch.dict(
             os.environ,
             {
@@ -71,9 +71,11 @@ class CatalogTests(unittest.TestCase):
         ):
             catalog = ModelCatalog.from_env()
             available = catalog.available()
+        # Gemini stays available through its adapter but is not part of the
+        # default routing catalog.
         self.assertEqual(
             {spec.provider for spec in available},
-            {"deepseek", "openai", "gemini"},
+            {"deepseek", "openai"},
         )
         self.assertTrue(all(spec.supports_tools for spec in available))
 
@@ -316,6 +318,9 @@ class HarnessRoutingTests(unittest.TestCase):
             "DEEPSEEK_API_KEY": "test-deepseek",
             "OPENAI_API_KEY": "test-openai",
             "GEMINI_API_KEY": "test-gemini",
+            # Neutralise a value loaded from the developer's .env by the CLI
+            # tests, which otherwise forces manual routing here.
+            "IRINA_PROVIDER": "auto",
             "IRINA_DEFAULT_PROVIDER": "deepseek",
             "IRINA_FALLBACK_PROVIDER": "deepseek",
         }

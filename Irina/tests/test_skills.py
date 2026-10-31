@@ -534,11 +534,25 @@ class SkillDraftTests(unittest.TestCase):
                 "PDF\n",
             )
             self.assertEqual(len(exported), 1)
-            with self.assertRaises(FileExistsError):
-                export_artifacts(["application"], workspace, host, contents=True)
+
+            # A second export merges into the existing folder, replacing the
+            # file the new run regenerated. It never raises "already exists".
             workspace.write_file("application/Acme/application.pdf", "NEW\n")
-            export_artifacts(
-                ["application"], workspace, host, contents=True, force=True
+            third = export_artifacts(
+                ["application"], workspace, host, contents=True
+            )
+            self.assertEqual([path.name for path in third], ["Acme"])
+            self.assertEqual(
+                (host / "Acme" / "application.pdf").read_text(encoding="utf-8"),
+                "NEW\n",
+            )
+
+            # A new company lands next to the existing one.
+            workspace.write_file("application/Globex/application.pdf", "B\n")
+            export_artifacts(["application"], workspace, host, contents=True)
+            self.assertEqual(
+                (host / "Globex" / "application.pdf").read_text(encoding="utf-8"),
+                "B\n",
             )
             self.assertEqual(
                 (host / "Acme" / "application.pdf").read_text(encoding="utf-8"),
@@ -574,10 +588,11 @@ class SkillDraftTests(unittest.TestCase):
                 "one\n",
             )
             self.assertEqual(len(exported), 1)
-            with self.assertRaises(FileExistsError):
-                harness.export_now()
+            # Re-export merges in place; it must not fail on the existing
+            # company folder.
+            self.assertEqual(harness.export_now(), [artifacts / "Acme"])
             harness._backend.write_file("application/Acme/out.txt", "two\n")
-            harness.export_now(force=True)
+            harness.export_now()
             self.assertEqual(
                 (artifacts / "Acme" / "out.txt").read_text(encoding="utf-8"),
                 "two\n",

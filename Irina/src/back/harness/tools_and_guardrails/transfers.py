@@ -84,6 +84,23 @@ def upload_inputs(
     return uploaded
 
 
+def _merge_tree(source: Path, target: Path) -> None:
+    """Copy ``source`` over ``target`` in place, replacing clashing files.
+
+    Files the new export does not contain are left alone, so an existing
+    company folder keeps its extras while regenerated files win.
+    """
+    if source.is_dir():
+        target.mkdir(parents=True, exist_ok=True)
+        for child in sorted(source.iterdir()):
+            _merge_tree(child, target / child.name)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_dir():
+        shutil.rmtree(target)
+    shutil.copy2(source, target)
+
+
 def _export_contents(
     workspace: Any,
     sandbox_path: str,
@@ -91,6 +108,12 @@ def _export_contents(
     *,
     force: bool,
 ) -> list[Path]:
+    """Export one sandbox directory's children into ``destination``.
+
+    An existing child is merged into rather than treated as an error: newly
+    generated files replace the old ones in place. ``force`` replaces the
+    whole child (removing files the new export does not include).
+    """
     download = getattr(workspace, "download", None)
     if not callable(download):
         raise ValueError("this workspace cannot export directory contents")
@@ -101,14 +124,16 @@ def _export_contents(
         for child in sorted(staged.iterdir()):
             target = destination / child.name
             if target.exists():
-                if not force:
-                    raise FileExistsError(
-                        f"artifact already exists: {target}; pass --force"
-                    )
-                if target.is_dir():
-                    shutil.rmtree(target)
+                if force:
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    else:
+                        target.unlink()
+                    shutil.move(str(child), str(target))
                 else:
-                    target.unlink()
+                    _merge_tree(child, target)
+                exported.append(target)
+                continue
             shutil.move(str(child), str(target))
             exported.append(target)
     return exported
@@ -126,7 +151,9 @@ def export_artifacts(
 
     ``contents=True`` merges a directory's children into ``host_dir`` instead of
     creating ``host_dir/<directory-name>``. This lets a skill emit
-    ``application/<Company>/`` and land it directly under ``D:\Application``.
+    ``application/<Company>/`` and land it directly under ``D:\\Application``.
+    An existing child is merged in place, with newly generated files replacing
+    the old ones; ``force`` replaces the whole child instead.
     """
     destination = Path(host_dir).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)

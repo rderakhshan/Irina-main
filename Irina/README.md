@@ -331,8 +331,10 @@ reports without a review loop. `IRINA_AUTO_EXPORT=1` saves the folder to the
 host after the run.
 
 Use `/export` to save configured artifacts immediately after they are created,
-without waiting for exit. `/export force` replaces an existing host folder.
-`--auto-export` does this automatically after each completed run.
+without waiting for exit. An existing company folder is merged in place: newly
+generated files replace old ones, and files the export did not produce are left
+alone. `/export force` replaces the whole folder instead. `--auto-export` does
+this automatically after each completed run.
 
 Streaming is on by default. `--no-stream` uses the original completion path;
 `--plain` disables color, animation, and Unicode fallbacks. `safe` is the
@@ -357,7 +359,7 @@ Memory flags:
 | `--artifacts-dir <host path>` | Host destination for `--export` (required with `--export`) |
 | `--export-contents` | Merge an exported directory's contents into `--artifacts-dir` (e.g. `D:\Application\<Company>`) |
 | `--auto-export` | Export configured artifacts after each completed run |
-| `--force` | Replace an existing exported artifact |
+| `--force` | Replace an existing exported folder instead of merging into it |
 | `--sandbox-image <image>` | Use an approved OpenShell image, e.g. `irina/irina-tools:1` |
 | `--sandbox-policy <path>` | Use an approved OpenShell policy; `openshell_policy_network.yaml` enables the listed web destinations |
 | `--verbose` | Show routine memory logs with level colors |
@@ -391,8 +393,12 @@ uv run python main.py `
 
 With `--export-contents`, the sandbox folder `application/<Company>/` lands
 directly as `D:\Application\<Company>\`. Without it, the export creates
-`D:\Application\application\<Company>\`. Existing company folders are
-refused unless `--force` is passed.
+`D:\Application\application\<Company>\`. When the company folder already exists
+on the host, the export merges into it: regenerated files replace the old ones,
+unrelated host files are kept, and the export continues instead of failing.
+`--force` replaces the whole folder, deleting files the new export does not
+contain. This means several applications can be produced in one session without
+restarting Irina.
 
 The `irina-tools` image includes TeX Live, Poppler, and the Python document,
 data, and notebook libraries used by the web/document/data tool groups:

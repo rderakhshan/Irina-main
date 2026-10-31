@@ -125,7 +125,9 @@ model, and troubleshooting.
   session resume, truthful exit codes, and Windows-safe output.
 - Genuine streaming across DeepSeek, OpenAI, and Gemini with provider-neutral
   delta events, safe tool-call assembly, and a streaming/non-streaming path.
-- A semantic terminal theme, Markdown-aware streaming renderer, progress
+- A semantic terminal theme and Rich Markdown renderer (headings, tables,
+  highlighted code, links) that switches to append-only blocks once a response
+  exceeds the screen, so live repaints never duplicate text; plus progress
   indicators, tool lifecycle display, plain/redirected mode, and serialized
   fleet presentation.
 - Canonical, architecture-independent experience storage with redaction,

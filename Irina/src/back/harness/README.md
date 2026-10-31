@@ -284,7 +284,10 @@ call can execute. `Harness` records an interrupted stream as `interrupted`, not
 - `rich_markdown.py`: assistant responses rendered as Rich Markdown documents
   (headings, lists, blockquotes, tables, syntax-highlighted code, OSC-8 links)
   through one `Console`; throttled `Live` repaint while streaming, append-only
-  block rendering past `MAX_LIVE_CHARS`, and one final render.
+  block rendering past `MAX_LIVE_CHARS` or once the document would exceed the
+  terminal height, and one final render. The live region is capped with
+  `vertical_overflow="ellipsis"` so a repaint can never scroll into scrollback
+  and leave duplicate copies.
 - `markdown.py`: line-oriented headings, lists, code fences, tables, and inline
   code for plain or redirected output where box drawing is unavailable.
 - `renderer.py`: streaming text, tool start/success/failure/blocked, compaction,
@@ -400,7 +403,9 @@ review, although their static checks passed.
 Stage 5 limits: streaming is synchronous and single-stream per Harness; there is
 no provider-side cancellation token beyond closing the connection. On a Unicode
 TTY, assistant text is rendered as Rich Markdown with a throttled live repaint
-and append-only blocks for long responses; plain or redirected output uses the
+that is capped to the terminal height. A document taller than the screen
+switches to append-only blocks, so repaint frames cannot accumulate in
+scrollback as repeated copies; plain or redirected output uses the
 line-oriented fallback, so tables there stay as readable aligned text rather
 than boxes. The cross-chunk redactor is bounded and documented; it does not
 claim absolute secret detection. Streaming usage is zero when the provider omits usage rather

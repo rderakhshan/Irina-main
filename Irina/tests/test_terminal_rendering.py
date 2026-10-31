@@ -32,6 +32,12 @@ def make_renderer(
     return renderer, stream
 
 
+def visible_count(buffer: io.StringIO, marker: str) -> int:
+    from src.back.harness.utils.formatting import strip_ansi
+
+    return strip_ansi(buffer.getvalue()).count(marker)
+
+
 def render_assistant(text: str, *, width: int = 100) -> str:
     renderer, stream = make_renderer(width=width)
     renderer(RunEvent(EventType.ASSISTANT, 1, text=text))
@@ -202,6 +208,39 @@ class LiveStreamingTests(unittest.TestCase):
         self.assertEqual(visible.count("Title"), 1)
         self.assertIn("paragraph text", visible)
         self.assertNotIn("| A |", visible)
+
+    def test_tall_document_switches_to_append_and_renders_once(self) -> None:
+        from src.back.harness.utils.formatting import strip_ansi
+
+        buffer = io.StringIO()
+        console = build_console(
+            buffer, terminal=True, color=False, width=40, height=10
+        )
+        stream = RichMarkdownStream(
+            console, live=True, redraw_interval=0.0, min_growth=0
+        )
+        # A short first delta fits the screen and may use the live region.
+        stream.feed("INTRO paragraph.\n\n")
+        self.assertTrue(stream.is_live)
+        # Crossing the screen height must stop live repainting before the
+        # region can scroll into scrollback.
+        text = "\n\n".join(f"MARK{index}." for index in range(20)) + "\n"
+        stream.feed(text)
+        self.assertFalse(stream.is_live)
+        self.assertTrue(stream.append_mode)
+        # Later blocks keep appending once each; the region is never repainted.
+        stream.feed("TAIL1.\n\nTAIL2.\n\n")
+        self.assertFalse(stream.is_live)
+        stream.finish()
+        self.assertEqual(visible_count(buffer, "TAIL1."), 1)
+        self.assertEqual(visible_count(buffer, "TAIL2."), 1)
+        visible = strip_ansi(buffer.getvalue())
+        for index in range(20):
+            self.assertEqual(
+                visible.count(f"MARK{index}."),
+                1,
+                f"MARK{index}. was rendered more than once",
+            )
 
     def test_stable_boundary_respects_fences_and_blank_lines(self) -> None:
         self.assertEqual(stable_boundary("a\n\nb"), 3)

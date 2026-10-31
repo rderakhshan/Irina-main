@@ -3,9 +3,10 @@
 Assistant responses are rendered as Markdown documents, not decorated line by
 line. While streaming, the accumulated text is redrawn through ``rich.live.Live``
 at a bounded rate so tables, fenced code, and lists never appear half-formed.
-Long responses switch to append-only block rendering so a full document is never
-reparsed on every token. The final render is printed once, so the transcript
-never contains duplicates.
+A document taller than the terminal switches to append-only block rendering:
+a live region that scrolls past the screen can never be erased, so repainting it
+would leave duplicate copies in scrollback. Long responses also switch on size.
+The final render is printed once, so the transcript never contains duplicates.
 
 The original assistant text is never modified: it is accumulated verbatim here
 and rendered only for display.
@@ -56,6 +57,7 @@ def build_console(
     terminal: bool,
     color: bool,
     width: int | None = None,
+    height: int | None = None,
 ) -> Console:
     """Create the renderer's single Console bound to an existing stream."""
     return Console(
@@ -63,6 +65,7 @@ def build_console(
         force_terminal=terminal,
         no_color=not color,
         width=width,
+        height=height,
         legacy_windows=False,
         highlight=False,
         emoji=False,
@@ -145,6 +148,33 @@ class RichMarkdownStream:
         """Whether the streamer has switched to append-only block rendering."""
         return self._append_mode
 
+    def _estimated_lines(self) -> int:
+        """Approximate how many terminal lines the document renders to."""
+        width = max(20, int(self.console.width or 80))
+        lines = self._text.count("\n") + 1
+        wrapped = sum(
+            max(0, (len(line) - 1) // width)
+            for line in self._text.split("\n")
+        )
+        return lines + wrapped + 2
+
+    def _live_height_limit(self) -> int:
+        """Lines the live region may occupy before it can no longer be erased.
+
+        A live region taller than the screen scrolls lines into scrollback,
+        where Rich can never clear them again; each repaint would leave a
+        permanent copy. Keep a couple of lines for the prompt.
+        """
+        try:
+            height = int(self.console.height or 0)
+        except Exception:
+            height = 0
+        return max(0, height - 2)
+
+    def _too_tall_for_live(self) -> bool:
+        limit = self._live_height_limit()
+        return bool(limit) and self._estimated_lines() > limit
+
     def feed(self, text: str) -> None:
         """Append a streamed delta and present whatever is safe to show."""
         if not text or self._finished:
@@ -155,7 +185,10 @@ class RichMarkdownStream:
         if self._append_mode:
             self._append_stable()
             return
-        if len(self._text) > self.max_live_chars:
+        if (
+            len(self._text) > self.max_live_chars
+            or self._too_tall_for_live()
+        ):
             self._switch_to_append()
             return
         now = time.monotonic()
@@ -176,7 +209,10 @@ class RichMarkdownStream:
                     console=self.console,
                     auto_refresh=False,
                     transient=True,
-                    vertical_overflow="visible",
+                    # Never let a repaint exceed the screen: lines that scroll
+                    # into scrollback cannot be erased, so they would appear
+                    # as duplicated copies of the response.
+                    vertical_overflow="ellipsis",
                     redirect_stdout=False,
                     redirect_stderr=False,
                 )

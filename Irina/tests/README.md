@@ -17,7 +17,7 @@ $env:IRINA_MEMORY_ENABLED='0'
 python -m unittest discover -s tests -v
 ```
 
-Current full run: **420 tests** (4 skips: two Windows symlink checks, one
+Current full run: **421 tests** (4 skips: two Windows symlink checks, one
 optional ExpeL dependency check, and the opt-in live Laya test). Run with
 `IRINA_MEMORY_ENABLED=0` for CLI tests, which otherwise pick up a developer's
 local memory configuration. OpenShell
@@ -276,6 +276,19 @@ not. Stage 4/5/6 live checks are separate; see the demo and memory READMEs.
 - Markdown headings, lists, fences, inline code, partial, and malformed input
 - plain/ASCII output and cross-chunk secret/control-sequence protection
 - thread-safe fleet rendering
+
+`test_terminal_rendering.py`:
+
+- headings, tables, code blocks, links, lists, and blockquotes render as Rich
+- long table cells wrap without overflowing the console width
+- tables and fences split across deltas render correctly when complete
+- malformed Markdown does not crash the renderer
+- the original assistant text is preserved exactly
+- live streaming clears its transient region and prints the final document once
+- a document taller than the terminal switches to append-only blocks and each
+  block renders exactly once (no repeated repaint frames)
+- tool start/completion/failure/blocked lines and verbose diagnostics
+- interruption finalises the partial response; plain mode keeps raw Markdown
 
 `test_stage4_projects.py`:
 
